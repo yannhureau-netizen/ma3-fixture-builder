@@ -4,6 +4,21 @@ Petite application web (PWA) pour créer la fiche d'un projecteur absent de la b
 
 Elle n'a besoin d'aucune installation : c'est du HTML/JavaScript pur, sans dépendance. Une fois ouverte, elle fonctionne aussi hors ligne.
 
+## En ligne
+
+L'appli est publiée sur **https://yannhureau-netizen.github.io/ma3-fixture-builder/** (GitHub Pages). Elle s'ouvre sur PC, tablette ou téléphone et s'installe comme une appli (icône « Installer » du navigateur). Les fiches restent enregistrées sur chaque appareil : pour passer de l'un à l'autre, utilise « Tout sauvegarder » puis « Importer une sauvegarde ».
+
+### Publier une mise à jour
+
+1. Change `VERSION` dans `sw.js` (ex. `fb-v4` → `fb-v5`), pour que les appareils récupèrent la nouvelle version.
+2. Dans PowerShell, dans ce dossier :
+   ```
+   git add -A
+   git commit -m "Description du changement"
+   git push
+   ```
+3. Le site est à jour au bout d'une minute environ.
+
 ## Lancer l'appli sur ce PC
 
 1. Ouvre une fenêtre PowerShell dans ce dossier.
