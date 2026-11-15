@@ -1,7 +1,7 @@
 # Petit serveur web local pour tester l'appli (aucune installation nécessaire).
 # Lancement : clic droit > « Exécuter avec PowerShell », ou : powershell -ExecutionPolicy Bypass -File serveur.ps1
 # Puis ouvrir http://localhost:8090 dans Chrome ou Edge. Ctrl+C pour arrêter.
-param([int]$Port = 8090)   # 8080 est pris par grandMA3 onPC (télécommande web)
+param([int]$Port = 8090, [switch]$Open)   # 8080 est pris par grandMA3 onPC (télécommande web) ; -Open ouvre le navigateur
 
 $root = $PSScriptRoot
 $types = @{
@@ -14,6 +14,7 @@ $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
 Write-Host "Fixture Builder disponible sur http://localhost:$Port  (Ctrl+C pour arrêter)"
+if ($Open) { Start-Process "http://localhost:$Port" }
 
 try {
   while ($listener.IsListening) {

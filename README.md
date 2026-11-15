@@ -21,6 +21,10 @@ L'appli est publiée sur **https://yannhureau-netizen.github.io/ma3-fixture-buil
 
 ## Lancer l'appli sur ce PC
 
+Le plus simple : **double-clique sur `Lancer l'appli.bat`**. Le serveur démarre et l'appli s'ouvre dans le navigateur. Laisse la fenêtre noire ouverte pendant que tu travailles, et ferme-la pour arrêter. Si le serveur tourne déjà, le fichier ouvre juste le navigateur.
+
+Sinon, à la main :
+
 1. Ouvre une fenêtre PowerShell dans ce dossier.
 2. Tape :
    ```
@@ -109,6 +113,7 @@ Tes projecteurs sont enregistrés automatiquement **dans le navigateur** de cet 
 | `js/storage.js` | La sauvegarde dans le navigateur |
 | `sw.js`, `manifest.webmanifest` | Le mode hors ligne et l'installation en appli |
 | `serveur.ps1` | Le petit serveur local pour tester |
+| `Lancer l'appli.bat` | Double-clic : lance le serveur et ouvre l'appli |
 
 Quand tu modifies des fichiers, change `VERSION` dans `sw.js` pour que l'appli installée se mette à jour.
 
