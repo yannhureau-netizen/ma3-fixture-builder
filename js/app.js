@@ -7,6 +7,9 @@ import { buildGdtf, buildDescriptionXml, gdtfFileName, makeUuid } from './gdtf.j
 import { importGdtf } from './gdtf-import.js';
 import { toPngDataUrl, isHex } from './color.js';
 import { loadAll, saveAll, loadPrefs, savePrefs } from './storage.js';
+import { SHAPES, ORDERS, arrangeParts, clearLayout, hasLayout, layoutSvg, fitGroups, isGroup } from './layout.js';
+import { dmxState, detectDmx, buildFrame, scheduleDmx, startDmx, stopDmx } from './dmx-out.js';
+import { loadCatalog, searchCatalog, parseOflUrl, fetchOflFixture, convertOfl, prettyKey } from './ofl.js';
 
 const app = document.getElementById('app');
 
@@ -25,6 +28,11 @@ const state = {
   saveFailed: false,
   cellsCount: 4,         // assistant « cellules identiques »
   cellsTpl: 'rgb',
+  layoutShape: 'line',   // disposition des sous-éléments
+  layoutCols: 4,
+  layoutOrder: 'normal',
+  layoutReverse: false,
+  ofl: { status: 'idle', items: [], mans: {}, time: 0, error: '', query: '', busy: false },   // bibliothèque OFL
   targetPart: '',        // sous-élément où les boutons « + … » ajoutent les canaux
 };
 
@@ -170,6 +178,7 @@ function renderHome() {
       </div>
       <div class="row">
         <button class="btn primary big" data-action="new">+ Nouveau projecteur</button>
+        <button class="btn" data-action="ofl" title="Chercher une fiche toute faite dans l'Open Fixture Library et la convertir">Bibliothèque OFL</button>
         <label class="btn" title="Ouvrir un fichier GDTF (par exemple venu de GDTF Share) pour le corriger">Ouvrir un fichier .gdtf<input type="file" accept=".gdtf,application/zip" data-file="gdtf" hidden></label>
         <label class="btn">Importer une sauvegarde<input type="file" accept=".json,application/json" data-file="import" hidden></label>
         ${list.length ? '<button class="btn" data-action="backup-all">Tout sauvegarder</button>' : ''}
@@ -216,6 +225,10 @@ function renderStarter() {
       </div>
       <button class="btn" data-action="home">Annuler</button>
     </div>
+    <button class="ofl-banner" data-action="ofl">
+      <b>Le projecteur existe peut-être déjà dans l'Open Fixture Library</b>
+      <span class="muted small">Des centaines de fiches libres à convertir en un clic : c'est souvent plus rapide que de partir de zéro.</span>
+    </button>
     <div class="cards starters">
       ${STARTERS.map(s => `
       <button class="starter${s.key === 'blank' ? ' blank' : ''}" data-action="start" data-key="${s.key}">
@@ -382,12 +395,16 @@ function renderParts(f) {
     const n = partUsage(f, p.id);
     return `
     <div class="part-row">
+      <span class="part-num">${i + 1}</span>
       <input type="text" data-bind="parts.${i}.name" data-kind="text" value="${esc(p.name)}" placeholder="ex. Anneau" aria-label="Nom du sous-élément">
+      ${isGroup(f, p) ? `<span class="muted small xy-group" title="Un groupe se place au centre de ses pixels">suit ses pixels</span>` : `<label class="xy" title="Position le long de la longueur, en mm depuis le centre">X <input type="number" step="any" data-bind="parts.${i}.x" data-kind="num" value="${Number(p.x) || 0}" aria-label="Position X (mm)"></label>
+      <label class="xy" title="Position le long de la largeur, en mm depuis le centre">Y <input type="number" step="any" data-bind="parts.${i}.y" data-kind="num" value="${Number(p.y) || 0}" aria-label="Position Y (mm)"></label>`}
       <span class="muted small">${n} ${n > 1 ? 'canaux' : 'canal'}</span>
       <button class="icon danger" title="Supprimer ce sous-élément" data-action="del-part" data-id="${p.id}">✕</button>
     </div>`;
   }).join('')}</div>` : ''}
   <button class="btn small" data-action="add-part">+ Ajouter un sous-élément</button>
+  ${parts.length ? renderLayoutBox(f) : ''}
   <div class="cells-box">
     <b>Barre LED / projecteur à pixels</b>
     <p class="muted small">Crée d'un coup plusieurs cellules identiques avec leurs canaux, ajoutés à la suite dans le mode « ${esc(mode().name)} ».</p>
@@ -398,6 +415,34 @@ function renderParts(f) {
       </label>
       <button class="btn small primary" data-action="make-cells">Créer les cellules</button>
     </div>
+  </div>`;
+}
+
+// Disposition des sous-éléments (pixels) dans le projecteur, vue de face
+function renderLayoutBox(f) {
+  const grid = state.layoutShape === 'grid';
+  const laid = hasLayout(f);
+  // les groupes de pixels suivent leurs pixels : ils ne sont pas disposés eux-mêmes
+  const groups = f.parts.filter(p => isGroup(f, p)).length;
+  const cells = f.parts.length - groups;
+  return `
+  <div class="cells-box layout-box">
+    <b>Disposition</b>
+    <p class="muted small">Place les sous-éléments dans le projecteur, vu de face : grandMA3 les affiche à cet endroit dans la vue 3D. L'appli utilise la longueur et la largeur indiquées plus haut, et l'ordre de la liste (le n° 1 en premier). Tu peux ensuite corriger X et Y à la main.${groups ? ` Les ${groups} groupes de pixels (en pointillés) suivent leurs pixels.` : ''}</p>
+    <div class="row">
+      <label class="mini">Forme
+        <select data-ui="layoutShape" data-rerender>${SHAPES.map(([v, l]) => `<option value="${v}"${v === state.layoutShape ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      </label>
+      ${grid ? `
+      <label class="mini">Colonnes <input type="number" min="1" max="128" data-ui="layoutCols" value="${state.layoutCols}"></label>
+      <label class="mini">Ordre
+        <select data-ui="layoutOrder">${ORDERS.map(([v, l]) => `<option value="${v}"${v === state.layoutOrder ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      </label>` : ''}
+      ${state.layoutShape !== 'ring' ? `<label class="mini check"><input type="checkbox" data-ui="layoutReverse"${state.layoutReverse ? ' checked' : ''}> De droite à gauche</label>` : ''}
+      <button class="btn small primary" data-action="layout-apply">Disposer les ${cells} élément${cells > 1 ? 's' : ''}</button>
+      ${laid ? '<button class="btn small" data-action="layout-clear">Tout remettre au centre</button>' : ''}
+    </div>
+    <div class="layout-view" data-layout>${laid ? layoutSvg(f) : '<p class="muted small">Pas encore de disposition : tous les éléments sont au centre du projecteur.</p>'}</div>
   </div>`;
 }
 
@@ -666,7 +711,20 @@ function previewHtml(f, m) {
         ${p.tilt != null ? `<div>Tilt ${fr(p.tilt)}°</div>` : ''}
       </div>
     </div>
-    ${parts.length ? `<div class="t-parts">${parts.map(z => `<div class="t-part" title="${esc(z.name)}"><span class="t-dot${blink(z)}"></span><small>${esc(z.name)}</small></div>`).join('')}</div>` : ''}`;
+    ${parts.length && hasLayout(f) ? `<div class="t-layout">${layoutSvg(f, { dots: partDots(f, parts), numbers: f.parts.length <= 48 })}</div>`
+    : parts.length ? `<div class="t-parts">${parts.map(z => `<div class="t-part" title="${esc(z.name)}"><span class="t-dot${blink(z)}"></span><small>${esc(z.name)}</small></div>`).join('')}</div>` : ''}`;
+}
+
+// Couleur de chaque sous-élément pour le schéma de disposition (masqué s'il n'a pas de canal dans ce mode)
+function partDots(f, zones) {
+  const byKey = new Map(zones.map(z => [z.key, z]));
+  return f.parts.map(p => {
+    const z = byKey.get(p.id);
+    if (!z) return { hide: true };   // pas de canal dans ce mode
+    return z.strobe
+      ? { fill: z.css, cls: 'strobe', style: `animation-duration:${Math.max(0.04, 1 / z.strobe).toFixed(3)}s` }
+      : { fill: z.css };
+  });
 }
 
 function renderTester(f) {
@@ -680,6 +738,7 @@ function renderTester(f) {
   <div class="tabs">
     ${f.modes.map((md, i) => `<button class="tab${i === mi ? ' active' : ''}" data-action="mode" data-idx="${i}">${esc(md.name || 'Mode')} <span class="muted small">${footprint(md)} adr.</span></button>`).join('')}
   </div>
+  ${m.channels.length ? renderDmxBox(m) : ''}
   ${m.channels.length ? `
   <div class="tester">
     <div class="t-preview" id="t-preview">${previewHtml(f, m)}</div>
@@ -705,8 +764,94 @@ function renderTester(f) {
   </div>` : '<div class="empty small-empty">Ce mode n\'a pas encore de canal.</div>'}`;
 }
 
+// ---------- sortie Art-Net / sACN (avec le serveur local) ----------
+function dmxCfg() {
+  const d = state.prefs.dmx || {};
+  return {
+    proto: d.proto === 'sacn' ? 'sacn' : 'artnet',
+    iface: d.iface || '',
+    dest: d.dest || '',
+    universeArt: Number.isFinite(Number(d.universeArt)) ? Number(d.universeArt) : 0,
+    universeSacn: Number(d.universeSacn) >= 1 ? Number(d.universeSacn) : 1,
+    address: Number(d.address) >= 1 ? Number(d.address) : 1,
+  };
+}
+
+function setDmxCfg(patch) {
+  state.prefs.dmx = { ...dmxCfg(), ...patch };
+  savePrefs(state.prefs);
+}
+
+// Trame envoyée : le mode affiché, avec les valeurs des faders
+function currentFrame() {
+  const f = fx();
+  if (!f || state.view !== 'edit') return null;
+  const m = mode();
+  const cfg = dmxCfg();
+  return { cfg, data: buildFrame(m, testValue, cfg.address) };
+}
+
+function renderDmxBox(m) {
+  const s = dmxState();
+  if (!s.checked) {
+    detectDmx().then(ok => {
+      // première fois : on choisit une carte réseau probable (réseau 2.x ou 10.x d'abord) et sa diffusion
+      if (ok && !dmxCfg().iface && s.interfaces.length) {
+        const pick = s.interfaces.find(i => /^(2|10)\./.test(i.ip)) || s.interfaces[0];
+        setDmxCfg({ iface: pick.ip, dest: pick.broadcast });
+      }
+      if (state.view === 'edit' && state.step === 4) render();
+    });
+    return '<div class="dmx-box"><span class="muted small">Recherche de la sortie réseau…</span></div>';
+  }
+  if (!s.available) {
+    return `
+    <details class="dmx-box">
+      <summary>Piloter le vrai projecteur (Art-Net / sACN)</summary>
+      <p class="muted small">Disponible seulement quand l'appli tourne sur ton PC, lancée avec <b>« Lancer l'appli.bat »</b> : c'est ce petit serveur qui envoie le DMX sur le réseau. Un navigateur seul (comme la version en ligne) ne peut pas le faire.</p>
+    </details>`;
+  }
+  const cfg = dmxCfg();
+  const fp = footprint(m);
+  const end = cfg.address + fp - 1;
+  const art = cfg.proto === 'artnet';
+  const ifaceKnown = s.interfaces.some(i => i.ip === cfg.iface);
+  const ifaceOpts = [['', 'Automatique']].concat(s.interfaces.map(i => [i.ip, `${i.name} — ${i.ip}`]));
+  if (cfg.iface && !ifaceKnown) ifaceOpts.push([cfg.iface, `${cfg.iface} (absente)`]);
+  const univ = art ? cfg.universeArt : cfg.universeSacn;
+  return `
+  <details class="dmx-box${s.on ? ' on' : ''}"${s.on || s.error ? ' open' : ''}>
+    <summary>Piloter le vrai projecteur (Art-Net / sACN)${s.on ? ' <span class="dmx-live">● envoi en cours</span>' : ''}</summary>
+    <p class="muted small">Les faders ci-dessous pilotent le projecteur branché sur le réseau, pour vérifier la fiche avant de passer à la console. Règle le projecteur sur la même adresse DMX et le même univers.</p>
+    <div class="dmx-grid">
+      <label class="mini">Protocole
+        <select data-dmx="proto"><option value="artnet"${art ? ' selected' : ''}>Art-Net</option><option value="sacn"${art ? '' : ' selected'}>sACN (E1.31)</option></select>
+      </label>
+      <label class="mini">Carte réseau
+        <select data-dmx="iface">${ifaceOpts.map(([v, l]) => `<option value="${esc(v)}"${v === cfg.iface ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      </label>
+      ${art ? `<label class="mini" title="Adresse de diffusion de la carte (tous les nodes), ou l'adresse IP d'un node précis">Envoyer vers
+        <input type="text" data-dmx="dest" value="${esc(cfg.dest || '255.255.255.255')}" inputmode="decimal" autocomplete="off" spellcheck="false">
+      </label>` : ''}
+      <label class="mini" title="${art ? 'Numérotation Art-Net : 0 = premier univers' : 'Numérotation sACN : 1 = premier univers'}">Univers ${art ? 'Art-Net' : 'sACN'}
+        <input type="number" data-dmx="${art ? 'universeArt' : 'universeSacn'}" min="${art ? 0 : 1}" max="${art ? 32767 : 63999}" value="${univ}">
+      </label>
+      <label class="mini">Adresse DMX
+        <input type="number" data-dmx="address" min="1" max="512" value="${cfg.address}">
+      </label>
+      <button class="btn ${s.on ? 'danger' : 'primary'}" data-action="dmx-toggle"${end > 512 ? ' disabled' : ''}>${s.on ? '■ Arrêter l\'envoi' : '▶ Envoyer au projecteur'}</button>
+    </div>
+    <p class="small ${end > 512 ? 'dmx-err' : 'muted'}">${end > 512
+      ? `Le mode occupe ${fp} adresses : à partir de l'adresse ${cfg.address}, il dépasse la fin de l'univers (512).`
+      : `Adresses ${cfg.address} à ${end} (${fp} canaux)${art ? ` · Art-Net univers ${univ} (${Math.floor(univ / 256)}:${Math.floor(univ / 16) % 16}:${univ % 16})` : ` · sACN univers ${univ}, multidiffusion 239.255.${Math.floor(univ / 256)}.${univ % 256}`}.`}</p>
+    ${s.error ? `<p class="small dmx-err">${esc(s.error)}</p>` : ''}
+    <p class="muted small">À l'arrêt, l'appli envoie des zéros. Si grandMA3 envoie aussi sur cet univers, le projecteur reçoit les deux : coupe la sortie de la console ou prends un autre univers pendant le test.</p>
+  </details>`;
+}
+
 // Mise à jour pendant qu'on bouge un fader (sans tout redessiner, pour ne pas lâcher le fader)
 function updateTester() {
+  scheduleDmx();
   const f = fx();
   const m = mode();
   const valueOf = valueOfFor(m);
@@ -746,10 +891,16 @@ function renderPrint(f) {
 
 // ---------- rendu ----------
 function render() {
+  // la sortie réseau ne continue que dans l'éditeur ; sinon on suit les changements (mode, boutons…)
+  if (dmxState().on) {
+    if (state.view !== 'edit') stopDmx();
+    else scheduleDmx();
+  }
   const a = document.activeElement;
   const focusBind = a && a.dataset && a.dataset.bind ? { bind: a.dataset.bind, tag: a.tagName } : null;
   app.innerHTML = state.view === 'home' ? renderHome()
     : state.view === 'starter' ? renderStarter()
+    : state.view === 'ofl' ? renderOfl()
     : state.view === 'print' ? renderPrint(fx())
     : renderEditor();
   document.body.classList.toggle('printing', state.view === 'print');
@@ -771,6 +922,8 @@ function refreshDerived() {
     const chObj = getPath(f, path.split('.').slice(0, -2).join('.'));
     if (fnObj && chObj) el.textContent = rangeEnd(chObj, fnObj);
   });
+  const lay = app.querySelector('[data-layout]');
+  if (lay && hasLayout(f)) { fitGroups(f); lay.innerHTML = layoutSvg(f); }
   const badge = app.querySelector('[data-errcount]');
   if (badge) badge.textContent = validate(f).filter(i => i.level === 'error').length;
 }
@@ -814,6 +967,20 @@ app.addEventListener('input', e => {
     updateTester();
     return;
   }
+  if (el.dataset.dmx) {
+    // réglages de la sortie réseau : appliqués tout de suite, redessin au « change »
+    const k = el.dataset.dmx;
+    if (k === 'dest') setDmxCfg({ dest: el.value.trim() });
+    else if (el.type === 'number') setDmxCfg({ [k]: Math.round(Number(el.value)) || 0 });
+    scheduleDmx();
+    return;
+  }
+  if (el.dataset.ui === 'oflQuery') {
+    state.ofl.query = el.value;
+    const box = document.getElementById('ofl-results');
+    if (box) box.outerHTML = oflResultsHtml();
+    return;
+  }
   if (el.dataset.ui === 'search') {
     state.search = el.value;
     const cards = document.getElementById('cards');
@@ -825,7 +992,7 @@ app.addEventListener('input', e => {
     return;
   }
   if (el.dataset.ui && el.tagName !== 'SELECT') {
-    state[el.dataset.ui] = el.type === 'number' ? Number(el.value) : el.value;
+    state[el.dataset.ui] = el.type === 'number' ? Number(el.value) : el.type === 'checkbox' ? el.checked : el.value;
     return;
   }
   if (!el.dataset.bind || el.tagName === 'SELECT' || el.type === 'checkbox') return;
@@ -842,7 +1009,30 @@ app.addEventListener('change', e => {
     render();
     return;
   }
-  if (el.dataset.tval || el.dataset.ui === 'search') return;
+  if (el.dataset.tval || el.dataset.ui === 'search' || el.dataset.ui === 'oflQuery') return;
+  if (el.dataset.file === 'ofl') {
+    const file = el.files[0];
+    el.value = '';
+    if (file) {
+      openOfl(async () => {
+        let json;
+        try { json = JSON.parse(await file.text()); } catch { throw new Error('fichier JSON illisible'); }
+        return { json, man: '', key: file.name.replace(/\.json$/i, '') };
+      });
+    }
+    return;
+  }
+  if (el.dataset.dmx) {
+    const k = el.dataset.dmx;
+    if (k === 'proto') setDmxCfg({ proto: el.value });
+    if (k === 'iface') {
+      const i = dmxState().interfaces.find(x => x.ip === el.value);
+      setDmxCfg({ iface: el.value, dest: i ? i.broadcast : '255.255.255.255' });
+    }
+    scheduleDmx();
+    render();
+    return;
+  }
   if (el.hasAttribute('data-sort')) {
     state.prefs.sort = el.value;
     savePrefs(state.prefs);
@@ -861,6 +1051,7 @@ app.addEventListener('change', e => {
   }
   if (el.dataset.ui) {
     if (el.tagName === 'SELECT') state[el.dataset.ui] = el.value;
+    if (el.hasAttribute('data-rerender')) render();
     return;
   }
   if (el.dataset.derive && state.derive) {
@@ -927,6 +1118,19 @@ app.addEventListener('click', e => {
       state.view = 'starter';
       window.scrollTo(0, 0);
       break;
+    case 'ofl':
+      state.view = 'ofl';
+      window.scrollTo(0, 0);
+      break;
+    case 'ofl-reload':
+      loadOflCatalog(true);
+      return;
+    case 'ofl-open': {
+      if (state.ofl.busy) return;
+      const { man, key } = el.dataset;
+      openOfl(() => fetchOflFixture(man, key));
+      return;
+    }
     case 'start': {
       const nf = buildStarter(el.dataset.key);
       state.fixtures.push(nf);
@@ -1080,6 +1284,10 @@ app.addEventListener('click', e => {
       scheduleSave();
       break;
     }
+    case 'dmx-toggle':
+      if (dmxState().on) stopDmx();
+      else startDmx(currentFrame);
+      break;
     case 'test-defaults':
       state.testValues = {};
       break;
@@ -1135,14 +1343,25 @@ app.addEventListener('click', e => {
     case 'make-cells': {
       const count = Math.max(1, Math.min(128, Math.round(state.cellsCount) || 1));
       const start = f.parts.filter(p => /^Pixel \d+$/.test(p.name)).length;
+      const onlyPixels = f.parts.every(p => /^Pixel \d+$/.test(p.name));
       for (let i = 1; i <= count; i++) {
         const p = { id: uid(), name: `Pixel ${start + i}` };
         f.parts.push(p);
         mode().channels.push(...makeCellChannels(state.cellsTpl, p.id));
       }
+      // des pixels seuls : on les aligne tout de suite (corrigeable dans « Disposition »)
+      if (onlyPixels) arrangeParts(f, { shape: state.layoutShape, cols: state.layoutCols, order: state.layoutOrder, reverse: state.layoutReverse });
       scheduleSave();
       break;
     }
+    case 'layout-apply':
+      arrangeParts(f, { shape: state.layoutShape, cols: state.layoutCols, order: state.layoutOrder, reverse: state.layoutReverse });
+      scheduleSave();
+      break;
+    case 'layout-clear':
+      clearLayout(f);
+      scheduleSave();
+      break;
     case 'add-wheel':
       f.wheels.push(newWheel(el.dataset.wkind, f));
       scheduleSave();
@@ -1212,6 +1431,7 @@ app.addEventListener('click', e => {
 });
 
 function openFixture(id) {
+  if (dmxState().on) stopDmx();
   const f = state.fixtures.find(x => x.id === id);
   if (f && !Array.isArray(f.parts)) f.parts = [];   // fiches créées avant les sous-éléments
   if (f && !Array.isArray(f.wheels)) f.wheels = []; // … ou avant les roues
@@ -1233,6 +1453,7 @@ async function importFile(file) {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
+    if (isOflJson(data)) { await openOfl(() => Promise.resolve({ json: data, man: '', key: file.name.replace(/\.json$/i, '') })); return; }
     const list = Array.isArray(data) ? data : [data];
     let n = 0;
     for (const item of list) {
@@ -1248,6 +1469,93 @@ async function importFile(file) {
   } catch {
     alert('Ce fichier n\'est pas une sauvegarde valide.');
   }
+}
+
+// ---------- Open Fixture Library ----------
+const isOflJson = d => !!(d && !Array.isArray(d) && (d.availableChannels || d.templateChannels || /open-fixture-library/.test(String(d.$schema || ''))));
+
+async function loadOflCatalog(force = false) {
+  state.ofl.status = 'loading';
+  render();
+  try {
+    const c = await loadCatalog(force);
+    state.ofl.items = c.items;
+    state.ofl.mans = c.manufacturers || {};
+    state.ofl.time = c.time;
+    state.ofl.status = 'ready';
+  } catch (e) {
+    state.ofl.status = 'error';
+    state.ofl.error = e.message;
+  }
+  if (state.view === 'ofl') render();
+}
+
+// getter : () => Promise<{ json, man, key }>
+async function openOfl(getter) {
+  state.ofl.busy = true;
+  if (state.view === 'ofl') render();
+  try {
+    const { json, man, key } = await getter();
+    if (!isOflJson(json)) throw new Error('ce n\'est pas une fiche de l\'Open Fixture Library');
+    const manName = (state.ofl.mans && state.ofl.mans[man]) || '';
+    const { fixture, notes } = await convertOfl(json, { man, key, manName });
+    state.fixtures.push(fixture);
+    state.saveFailed = !saveAll(state.fixtures);
+    state.ofl.busy = false;
+    openFixture(fixture.id);
+    state.importNotes = notes;
+    render();
+  } catch (e) {
+    state.ofl.busy = false;
+    render();
+    alert(`Impossible de reprendre cette fiche : ${e.message}.`);
+  }
+}
+
+function oflResultsHtml() {
+  const o = state.ofl;
+  const q = o.query.trim();
+  const link = parseOflUrl(q);
+  if (link && /[/.]/.test(q)) {
+    return `<div class="ofl-results" id="ofl-results">
+      <button class="ofl-item" data-action="ofl-open" data-man="${esc(link.man)}" data-key="${esc(link.key)}">
+        <b>${esc((o.mans && o.mans[link.man]) || prettyKey(link.man))}</b> ${esc(prettyKey(link.key))}<span class="muted small">Ouvrir la fiche de ce lien</span>
+      </button></div>`;
+  }
+  if (o.status !== 'ready') return '<div id="ofl-results"></div>';
+  if (!q) return `<div class="ofl-results" id="ofl-results"><p class="muted small">${o.items.length} fiches disponibles. Tape un fabricant ou un modèle (ex. « chauvet rogue », « pixel bar »).</p></div>`;
+  const res = searchCatalog(o.items, q, 80);
+  return `<div class="ofl-results" id="ofl-results">
+    ${res.length ? res.map(it => `
+      <button class="ofl-item" data-action="ofl-open" data-man="${esc(it.man)}" data-key="${esc(it.key)}">
+        <b>${esc(it.manName)}</b> ${esc(it.name)}
+      </button>`).join('') : '<p class="muted small">Aucune fiche ne correspond. Essaie avec moins de mots, ou le nom du fabricant seul.</p>'}
+    ${res.length >= 80 ? '<p class="muted small">Seuls les 80 premiers résultats sont affichés : précise ta recherche.</p>' : ''}
+  </div>`;
+}
+
+function renderOfl() {
+  const o = state.ofl;
+  if (o.status === 'idle') setTimeout(() => loadOflCatalog(), 0);
+  return `
+  <section class="home ofl">
+    <div class="home-head">
+      <div>
+        <h1>Bibliothèque Open Fixture Library</h1>
+        <p class="muted">Des centaines de fiches libres, écrites par la communauté (<a href="https://open-fixture-library.org" target="_blank" rel="noopener">open-fixture-library.org</a>). L'appli convertit la fiche choisie : tu la vérifies, tu la corriges si besoin, puis tu l'exportes en .gdtf.</p>
+      </div>
+      <button class="btn" data-action="home">Retour</button>
+    </div>
+    <div class="ofl-tools">
+      <input type="search" class="search" data-ui="oflQuery" value="${esc(o.query)}" placeholder="Rechercher, ou coller le lien d'une fiche OFL" aria-label="Rechercher une fiche OFL" autofocus>
+      <label class="btn" title="Fichier .json téléchargé depuis open-fixture-library.org">Ouvrir un fichier OFL (.json)<input type="file" accept=".json,application/json" data-file="ofl" hidden></label>
+    </div>
+    ${o.busy ? '<p class="ofl-status">Conversion de la fiche…</p>' : ''}
+    ${o.status === 'loading' ? '<p class="ofl-status">Chargement du catalogue…</p>' : ''}
+    ${o.status === 'error' ? `<p class="ofl-status err">Catalogue indisponible : ${esc(o.error)}. <button class="btn small" data-action="ofl-reload">Réessayer</button></p>` : ''}
+    ${oflResultsHtml()}
+    ${o.status === 'ready' ? `<p class="muted small">Catalogue du ${new Date(o.time).toLocaleDateString('fr-FR')}. <button class="linkish" data-action="ofl-reload">Mettre à jour</button></p>` : ''}
+  </section>`;
 }
 
 async function openGdtf(file) {
@@ -1294,3 +1602,6 @@ render();
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
+
+// La sortie réseau signale une erreur (serveur arrêté…) : on l'affiche dans le testeur
+dmxState().onChange = () => { if (state.view === 'edit' && state.step === 4) render(); };

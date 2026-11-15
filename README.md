@@ -41,6 +41,8 @@ Pour arrêter le serveur : `Ctrl+C` dans la fenêtre PowerShell.
 
 Sur l'accueil, la recherche (fabricant, nom… sans tenir compte des accents) et le tri (récents, fabricant, nom) aident à retrouver une fiche.
 
+Avant de partir de zéro, regarde dans la **Bibliothèque OFL** (voir plus bas) : le projecteur y est peut-être déjà.
+
 En cliquant sur **« + Nouveau projecteur »**, choisis un point de départ : fiche vide, ou modèle tout prêt (PAR LED RGB / RGBW / RGBWA+UV, lyre spot / wash / beam, barre LED 8 pixels, découpe LED, stroboscope). Le modèle donne des modes et des canaux courants, que tu ajustes ensuite d'après la doc.
 
 1. **Projecteur** : fabricant, nom, lyre ou fixe, type de source. Facultatif : une **photo** (affichée dans le Patch de grandMA3), les **dimensions** (taille dans la vue 3D) et le **poids**.
@@ -48,6 +50,34 @@ En cliquant sur **« + Nouveau projecteur »**, choisis un point de départ : fi
 3. **Canaux DMX** : ajoute les canaux dans l'ordre de la doc du fabricant avec les boutons « + Intensité », « + Pan / Tilt 16 bits », « + RGB »… Le bouton **Plages** permet de découper un canal (ex. 0–7 fermé, 8–15 ouvert, 16–249 strobe), et d'ajouter des **réglages nommés** (un gobo, une couleur). La case « Réglages avancés » affiche les valeurs physiques (degrés, Hz…). « + Canal inutilisé » réserve une adresse sans fonction.
 4. **Tester** : un fader par canal, comme sur la console. L'appli affiche la plage et le réglage actifs, la valeur physique (degrés, Hz, %…) et un aperçu du résultat : couleur, intensité, shutter ou strobe, gobo, Pan/Tilt, sous-éléments. Les boutons « Valeurs par défaut », « Plein feu » et « Tout à 0 » donnent un point de départ.
 5. **Exporter** : l'appli vérifie la fiche (erreurs bloquantes et **conseils**, par exemple « Pan en 8 bits », « Intensité par défaut à 255 », « roue reliée à aucun canal »), puis télécharge le fichier `.gdtf`. Le bouton **« Fiche DMX imprimable »** donne un document propre (photo, caractéristiques, roues, tableau de chaque mode) à imprimer ou à enregistrer en PDF.
+
+### Bibliothèque Open Fixture Library (OFL)
+
+L'[Open Fixture Library](https://open-fixture-library.org) rassemble des centaines de fiches de projecteurs libres, écrites par la communauté. Sur l'accueil, **« Bibliothèque OFL »** :
+
+1. Tape un fabricant ou un modèle (ex. « chauvet rogue »), ou colle le lien d'une fiche du site OFL.
+2. Clique sur la fiche : l'appli la convertit et l'ouvre, avec un résumé de ce qui a été repris.
+3. Vérifie-la avec le testeur et la doc du fabricant, corrige si besoin, puis exporte le .gdtf.
+
+Ce qui est repris : modes, canaux (8 et 16 bits), plages et réglages, roues avec leurs couleurs et les images de gobos de l'OFL, dimensions, poids, puissance, pixels des barres LED (déjà disposés), canaux dont la fonction change selon un autre canal (en variantes conditionnelles). Un fichier OFL `.json` téléchargé peut aussi être ouvert directement.
+
+Il faut Internet pour chercher dans le catalogue. Il est gardé une semaine dans le navigateur (bouton « Mettre à jour » pour le recharger).
+
+### Piloter le vrai projecteur (Art-Net / sACN)
+
+À l'étape **Tester**, le panneau **« Piloter le vrai projecteur »** envoie les valeurs des faders sur le réseau, pour vérifier la fiche sur le projecteur lui-même :
+
+1. Lance l'appli avec **`Lancer l'appli.bat`** (c'est ce petit serveur qui envoie le DMX : la version en ligne ne peut pas le faire).
+2. Choisis le protocole (Art-Net ou sACN), la carte réseau, l'univers et l'adresse DMX du projecteur.
+3. Clique sur **« Envoyer au projecteur »**, puis bouge les faders.
+
+À l'arrêt, l'appli envoie des zéros. Si grandMA3 envoie aussi sur le même univers, le projecteur reçoit les deux : coupe la sortie de la console ou prends un autre univers pendant le test. En Art-Net, l'univers 0 est le premier ; en sACN, c'est l'univers 1.
+
+### Disposition des pixels
+
+À l'étape 1, quand il y a des sous-éléments, la partie **« Disposition »** les place dans le projecteur, vu de face : en ligne, en grille (avec le nombre de colonnes, ligne par ligne ou en serpentin) ou en cercle. Un schéma montre le résultat, et chaque élément a ses positions X et Y (en mm depuis le centre) à corriger à la main si besoin. grandMA3 affiche ensuite les pixels au bon endroit dans la vue 3D, et le testeur montre les couleurs de chaque pixel sur ce schéma.
+
+Les groupes de pixels (ex. « moitié gauche » d'une barre) apparaissent en pointillés et suivent leurs pixels.
 
 ### Plages conditionnelles (variantes)
 
@@ -70,7 +100,7 @@ Pour que grandMA3 affiche les vraies couleurs et les images des gobos :
 Sur l'accueil, **« Ouvrir un fichier .gdtf »** transforme un fichier GDTF (par exemple de GDTF Share ou de la bibliothèque d'une console) en fiche modifiable : modes, canaux, plages, réglages, roues avec couleurs et images, sous-éléments. Une fois corrigée, exporte-la à nouveau. Elle garde son identifiant, et le numéro de révision augmente.
 
 Ce qui n'est pas repris, et que l'appli signale à l'ouverture :
-- la forme 3D d'origine (l'appli recrée une structure simple) ;
+- la forme 3D d'origine (l'appli recrée une structure simple, mais garde la position des sous-éléments) ;
 - les canaux virtuels (sans adresse DMX) ;
 - les plages conditionnelles dont le canal maître est introuvable (les autres sont reprises) ;
 - les canaux sur un 2e univers DMX.
@@ -105,6 +135,9 @@ Tes projecteurs sont enregistrés automatiquement **dans le navigateur** de cet 
 | `js/model.js` | Les données, les modèles de canaux « + … », le mode dérivé et les vérifications |
 | `js/starters.js` | Les modèles de départ (PAR, lyres, barre LED…) |
 | `js/tester.js` | Le testeur DMX : plage active, valeur physique, aperçu |
+| `js/dmx-out.js` | La sortie Art-Net / sACN du testeur (envoyée par le serveur local) |
+| `js/ofl.js` | Le catalogue et la conversion des fiches de l'Open Fixture Library |
+| `js/layout.js` | La disposition des pixels (positions, schéma) |
 | `js/print.js` | La fiche DMX imprimable |
 | `js/gdtf.js` | La fabrication du `description.xml` au format GDTF 1.1 (avec roues et images) |
 | `js/gdtf-import.js` | La lecture d'un `.gdtf` existant |
@@ -112,7 +145,7 @@ Tes projecteurs sont enregistrés automatiquement **dans le navigateur** de cet 
 | `js/zip.js`, `js/unzip.js` | Écriture et lecture des zip (un .gdtf est un zip) |
 | `js/storage.js` | La sauvegarde dans le navigateur |
 | `sw.js`, `manifest.webmanifest` | Le mode hors ligne et l'installation en appli |
-| `serveur.ps1` | Le petit serveur local pour tester |
+| `serveur.ps1` | Le petit serveur local, qui envoie aussi l'Art-Net / sACN du testeur |
 | `Lancer l'appli.bat` | Double-clic : lance le serveur et ouvre l'appli |
 
 Quand tu modifies des fichiers, change `VERSION` dans `sw.js` pour que l'appli installée se mette à jour.

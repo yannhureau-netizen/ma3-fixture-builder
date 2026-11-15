@@ -1,6 +1,6 @@
 // Ouverture d'un fichier .gdtf existant : on le convertit en fiche modifiable dans l'appli.
 // Ce qui est repris : identité, source, roues (couleurs + images), modes, canaux, plages, réglages,
-// sous-éléments. La forme 3D d'origine n'est pas reprise (l'appli recrée une structure simple).
+// sous-éléments et leur position. La forme 3D d'origine n'est pas reprise (l'appli recrée une structure simple).
 import { readZip } from './unzip.js';
 import { gdtfColorToHex, toPngDataUrl } from './color.js';
 import { ATTRIBUTES, UNUSED, RESERVED_GEOMETRIES } from './attributes.js';
@@ -373,6 +373,26 @@ export async function importGdtf(file) {
   }
 
   if (!fx.modes.length) throw new Error('aucun mode DMX dans le fichier');
+
+  // Disposition des sous-éléments (vue de face, en mm) : déplacement cumulé depuis le corps du projecteur
+  const shift = el => {
+    const v = (attr(el, 'Position').match(/-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g) || []).map(Number);
+    return v.length >= 12 ? [v[3], v[7]] : [0, 0];
+  };
+  let placed = 0;
+  for (const [geoName, p] of partByName) {
+    let x = 0, y = 0;
+    for (let n = geoName; n && geo.get(n) && geo.get(n).depth >= 1; n = geo.get(n).parent) {
+      const [dx, dy] = shift(geo.get(n).el);
+      x += dx; y += dy;
+    }
+    if (Math.abs(x) >= 0.0005 || Math.abs(y) >= 0.0005) {
+      p.x = Math.round(x * 10000) / 10;
+      p.y = Math.round(y * 10000) / 10;
+      placed++;
+    }
+  }
+  if (!placed) fx.parts.forEach(p => { delete p.x; delete p.y; });
   fx.kind = hasAxis || anyPanTilt ? 'moving' : 'fixed';
 
   if (inexact) notes.push('Certaines valeurs 16 ou 24 bits ont été arrondies à l\'échelle 0-255 de l\'appli. Vérifie les plages très serrées.');
@@ -383,6 +403,8 @@ export async function importGdtf(file) {
   if (virtualCount) notes.push(`${virtualCount} canal(aux) virtuel(s) (sans adresse DMX, ex. dimmer virtuel) n'ont pas été repris.`);
   if (skippedBreaks) notes.push(`${skippedBreaks} canal(aux) sur un 2e univers DMX (DMX Break) ne sont pas gérés et ont été ignorés.`);
   if (fx.parts.length) notes.push(`${fx.parts.length} sous-élément(s) reconnu(s) : vérifie leur répartition à l'étape « Canaux DMX ».`);
-  notes.push('La forme 3D d\'origine (modèles, positions des éléments) n\'est pas reprise : à l\'export, l\'appli recrée une structure simple.');
+  notes.push(placed
+    ? `La forme 3D d'origine n'est pas reprise (l'appli recrée une structure simple), mais la position des ${placed} sous-élément(s) l'est : vois le schéma à l'étape 1.`
+    : 'La forme 3D d\'origine n\'est pas reprise : à l\'export, l\'appli recrée une structure simple.');
   return { fixture: fx, notes };
 }

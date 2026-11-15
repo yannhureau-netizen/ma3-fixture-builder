@@ -1,6 +1,7 @@
 // Modèles de départ proposés quand on crée un nouveau projecteur.
 // Chacun produit une fiche complète que l'on ajuste ensuite d'après la doc du fabricant.
 import { newFixture, newWheel, newChannel, uid, TEMPLATES, makeCellChannels, linkWheels, fillSetsFromWheel } from './model.js';
+import { arrangeParts } from './layout.js';
 
 // Canaux à partir des boutons « + … » de l'appli
 function chans(...keys) {
@@ -95,6 +96,7 @@ export const STARTERS = [
     build: () => {
       const fx = base({ kind: 'fixed', beamType: 'Wash', beamAngle: 30, power: 150, length: 1000, width: 80, height: 100, description: 'Modèle de départ : barre LED 8 pixels' });
       for (let i = 1; i <= 8; i++) fx.parts.push({ id: uid(), name: `Pixel ${i}` });
+      arrangeParts(fx, { shape: 'line' });
       addMode(fx, '24 canaux (pixels)', fx.parts.flatMap(p => makeCellChannels('rgb', p.id)));
       addMode(fx, '26 canaux', [...chans('dim', 'strobe'), ...fx.parts.flatMap(p => makeCellChannels('rgb', p.id))]);
       addMode(fx, '3 canaux (tout ensemble)', chans('rgb'));

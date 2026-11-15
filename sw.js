@@ -1,6 +1,6 @@
 // Mode hors ligne : on garde une copie de l'appli dans le navigateur.
 // Pense à changer VERSION à chaque mise à jour des fichiers.
-const VERSION = 'fb-v7';
+const VERSION = 'fb-v8';
 const FILES = [
   './',
   './index.html',
@@ -19,6 +19,9 @@ const FILES = [
   './js/tester.js',
   './js/print.js',
   './js/storage.js',
+  './js/layout.js',
+  './js/dmx-out.js',
+  './js/ofl.js',
 ];
 
 self.addEventListener('install', e => {
@@ -38,7 +41,9 @@ self.addEventListener('activate', e => {
 // cache: 'no-cache' : le navigateur redemande toujours au serveur si le fichier a changé
 // (GitHub Pages autorise sinon une copie de 10 minutes, ce qui retarde les mises à jour).
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
+  const url = new URL(e.request.url);
+  // api/ : sortie DMX du serveur local, jamais mise en cache
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.includes('/api/')) return;
   e.respondWith(
     fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then(res => {

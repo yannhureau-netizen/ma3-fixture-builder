@@ -362,3 +362,48 @@ input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; accent-color:
   .stepper .step { flex-direction: column; gap: 2px; font-size: .85rem; }
   .panel { padding: 12px; }
 }
+
+/* Disposition des sous-éléments */
+.part-row .part-num { width: 22px; text-align: right; color: var(--muted, #8a90a0); font-size: .8rem; }
+.part-row label.xy { display: flex; align-items: center; gap: 4px; font-size: .8rem; color: var(--muted, #8a90a0); flex: 0 0 auto; }
+.part-row label.xy input { width: 78px; flex: 0 0 auto; padding: 4px 6px; min-height: 32px; }
+.parts { max-width: 680px; }
+.layout-box .row { flex-wrap: wrap; align-items: flex-end; }
+.layout-box .mini.check { display: flex; align-items: center; gap: 6px; }
+.layout-view { margin-top: 10px; max-width: 680px; }
+.layout-svg { display: block; width: 100%; max-height: 260px; }
+.t-layout { margin-top: 12px; }
+.t-layout .layout-svg { max-height: 220px; }
+.layout-svg .strobe { animation-name: strobe-svg; }
+@keyframes strobe-svg { 50% { opacity: .05; } }
+@media (max-width: 600px) {
+  .part-row { flex-wrap: wrap; }
+  .part-row input[type="text"] { flex: 1 1 60%; }
+}
+
+/* Sortie Art-Net / sACN */
+.dmx-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; background: var(--surface, transparent); }
+.dmx-box.on { border-color: var(--accent); }
+.dmx-box summary { cursor: pointer; font-weight: 600; }
+.dmx-box p { margin: 8px 0; }
+.dmx-grid { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 8px; }
+.dmx-grid select { width: auto; max-width: 260px; }
+.dmx-grid input[type="number"] { width: 90px; }
+.dmx-grid input[type="text"] { width: 150px; }
+.dmx-live { color: var(--accent); font-weight: 600; font-size: .85rem; margin-left: 6px; }
+.dmx-err { color: var(--danger); }
+
+/* Open Fixture Library */
+.ofl-banner { display: flex; flex-direction: column; gap: 4px; width: 100%; text-align: left; padding: 12px 16px; margin-bottom: 16px; border: 1px dashed var(--accent); border-radius: var(--radius); background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
+.ofl-banner:hover { background: var(--surface-2); }
+.ofl-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.ofl-tools .search { flex: 1 1 320px; }
+.ofl-status { padding: 10px 14px; border-radius: var(--radius); background: var(--surface); }
+.ofl-status.err { color: var(--danger); }
+.ofl-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.ofl-results > p { grid-column: 1 / -1; margin: 4px 0; }
+.ofl-item { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); cursor: pointer; font: inherit; }
+.ofl-item:hover { border-color: var(--accent); }
+.ofl-item b { color: var(--accent); font-weight: 600; }
+.linkish { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+.part-row .xy-group { width: 190px; flex: 0 0 auto; font-style: italic; }

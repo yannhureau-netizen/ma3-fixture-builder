@@ -3,6 +3,7 @@ import { getAttribute, channelGeometry, partGeometryName, UNUSED, registerAttrib
 import { hexToGdtfColor, dataUrlToBytes } from './color.js';
 import { makeZip } from './zip.js';
 import { functionGroups } from './model.js';
+import { hasLayout, cellSize } from './layout.js';
 
 const IDENTITY = '{1,0,0,0}{0,1,0,0}{0,0,1,0}{0,0,0,1}';
 
@@ -118,24 +119,38 @@ function wheelsXml(fx, names, media) {
 }
 
 function modelsAndGeometries(fx) {
-  const beamTag = name => `<Beam Name="${esc(name)}" Model="Beam" Position="${IDENTITY}" LampType="${esc(fx.lampType)}" PowerConsumption="${num(fx.power, 100)}" LuminousFlux="10000" ColorTemperature="6000" BeamAngle="${num(fx.beamAngle, 25)}" FieldAngle="${num(fx.beamAngle, 25)}" BeamRadius="0.05" BeamType="${esc(fx.beamType)}" ColorRenderingIndex="100"/>`;
-  // Faisceau principal + un faisceau par sous-élément (MA3 en fait des sous-parties du projecteur)
-  const indent = fx.kind === 'moving' ? '            ' : '        ';
-  const beam = [beamTag('Beam'), ...(fx.parts || []).map(p => beamTag(partGeometryName(p)))].join('\n' + indent);
-  // Dimensions réelles (mm -> m) si elles sont renseignées, sinon des valeurs plausibles
   const moving = fx.kind === 'moving';
+  // Dimensions réelles (mm -> m) si elles sont renseignées, sinon des valeurs plausibles
   const L = Number(fx.length) > 0 ? fx.length / 1000 : (moving ? 0.35 : 0.3);
   const W = Number(fx.width) > 0 ? fx.width / 1000 : (moving ? 0.35 : 0.3);
   const H = Number(fx.height) > 0 ? fx.height / 1000 : (moving ? 0.65 : 0.3);
   const r = v => Number(v.toFixed(4));
+  const parts = fx.parts || [];
+  const laidOut = hasLayout(fx);
+  // Sur un projecteur fixe, les pixels sont posés sur la face avant (dessous) du boîtier
+  const z = laidOut && !moving ? r(-H / 2) : 0;
+  const pos = (x, y, zz) => `{1,0,0,${r(x)}}{0,1,0,${r(y)}}{0,0,1,${zz}}{0,0,0,1}`;
+  const cell = laidOut ? Math.max(0.005, Math.min(cellSize(fx) / 1000, Math.max(L, W))) : 0.1;
+  const beamTag = (name, model, position, radius) => `<Beam Name="${esc(name)}" Model="${model}" Position="${position}" LampType="${esc(fx.lampType)}" PowerConsumption="${num(fx.power, 100)}" LuminousFlux="10000" ColorTemperature="6000" BeamAngle="${num(fx.beamAngle, 25)}" FieldAngle="${num(fx.beamAngle, 25)}" BeamRadius="${radius}" BeamType="${esc(fx.beamType)}" ColorRenderingIndex="100"/>`;
+  // Faisceau principal + un faisceau par sous-élément (MA3 en fait des sous-parties du projecteur),
+  // placé à sa position quand une disposition est définie
+  const indent = moving ? '            ' : '        ';
+  const beam = [
+    beamTag('Beam', 'Beam', laidOut ? pos(0, 0, z) : IDENTITY, 0.05),
+    ...parts.map(p => laidOut
+      ? beamTag(partGeometryName(p), 'Pixel', pos((Number(p.x) || 0) / 1000, (Number(p.y) || 0) / 1000, z), r(cell / 2))
+      : beamTag(partGeometryName(p), 'Beam', IDENTITY, 0.05)),
+  ].join('\n' + indent);
   let models = '    <Models>\n';
   let geos = '    <Geometries>\n';
+  const beamModels = '      <Model Name="Beam" Length="0.1" Width="0.1" Height="0.02" PrimitiveType="Cylinder"/>\n'
+    + (laidOut ? `      <Model Name="Pixel" Length="${r(cell)}" Width="${r(cell)}" Height="0.01" PrimitiveType="Cube"/>\n` : '');
   if (moving) {
     // pied + fourche + tête = hauteur totale
     models += `      <Model Name="Base" Length="${r(L)}" Width="${r(W)}" Height="${r(H * 0.2)}" PrimitiveType="Base"/>\n`;
     models += `      <Model Name="Yoke" Length="${r(L)}" Width="${r(W * 0.3)}" Height="${r(H * 0.35)}" PrimitiveType="Yoke"/>\n`;
     models += `      <Model Name="Head" Length="${r(L * 0.7)}" Width="${r(W * 0.7)}" Height="${r(H * 0.45)}" PrimitiveType="Head"/>\n`;
-    models += '      <Model Name="Beam" Length="0.1" Width="0.1" Height="0.02" PrimitiveType="Cylinder"/>\n';
+    models += beamModels;
     geos += `      <Geometry Name="Base" Model="Base" Position="${IDENTITY}">\n`;
     geos += `        <Axis Name="Yoke" Model="Yoke" Position="{1,0,0,0}{0,1,0,0}{0,0,1,${r(-H * 0.2)}}{0,0,0,1}">\n`;
     geos += `          <Axis Name="Head" Model="Head" Position="{1,0,0,0}{0,1,0,0}{0,0,1,${r(-H * 0.3)}}{0,0,0,1}">\n`;
@@ -145,7 +160,7 @@ function modelsAndGeometries(fx) {
     geos += '      </Geometry>\n';
   } else {
     models += `      <Model Name="Base" Length="${r(L)}" Width="${r(W)}" Height="${r(H)}" PrimitiveType="Cube"/>\n`;
-    models += '      <Model Name="Beam" Length="0.1" Width="0.1" Height="0.02" PrimitiveType="Cylinder"/>\n';
+    models += beamModels;
     geos += `      <Geometry Name="Base" Model="Base" Position="${IDENTITY}">\n`;
     geos += `        ${beam}\n`;
     geos += '      </Geometry>\n';
