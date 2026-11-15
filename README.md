@@ -1,0 +1,89 @@
+# MA3 Fixture Builder
+
+Petite application web (PWA) pour créer la fiche d'un projecteur absent de la bibliothèque grandMA3, et l'exporter en fichier **.gdtf**, importable dans la console.
+
+Elle n'a besoin d'aucune installation : c'est du HTML/JavaScript pur, sans dépendance. Une fois ouverte, elle fonctionne aussi hors ligne.
+
+## Lancer l'appli sur ce PC
+
+1. Ouvre une fenêtre PowerShell dans ce dossier.
+2. Tape :
+   ```
+   powershell -ExecutionPolicy Bypass -File serveur.ps1
+   ```
+3. Ouvre **http://localhost:8090** dans Chrome ou Edge. (Pas 8080 : ce port est utilisé par grandMA3 onPC.)
+4. Pour l'installer comme une appli : icône « Installer » dans la barre d'adresse.
+
+Pour arrêter le serveur : `Ctrl+C` dans la fenêtre PowerShell.
+
+> Ouvrir directement `index.html` en double-cliquant ne marche pas : les navigateurs bloquent les modules JavaScript en `file://`. Il faut passer par le serveur.
+
+## Utilisation en 4 étapes
+
+1. **Projecteur** : fabricant, nom, lyre ou fixe, type de source.
+2. **Roues** (facultatif) : roues de couleurs, de gobos, prismes… avec la couleur ou l'image de chaque fente.
+3. **Canaux DMX** : ajoute les canaux dans l'ordre de la doc du fabricant avec les boutons « + Intensité », « + Pan / Tilt 16 bits », « + RGB »… Le bouton **Plages** permet de découper un canal (ex. 0–7 fermé, 8–15 ouvert, 16–249 strobe), et d'ajouter des **réglages nommés** (un gobo, une couleur). La case « Réglages avancés » affiche les valeurs physiques (degrés, Hz…). « + Canal inutilisé » réserve une adresse sans fonction.
+4. **Exporter** : l'appli vérifie la fiche, puis télécharge le fichier `.gdtf`.
+
+### Roues de couleurs et de gobos
+
+Pour que grandMA3 affiche les vraies couleurs et les images des gobos :
+
+1. À l'étape **Roues**, crée la roue (« + Roue de couleurs », « + Roue de gobos »…). Pour chaque fente : une couleur (pastille) ou une image (bouton « Image… », n'importe quel format, convertie en PNG).
+2. À l'étape **Canaux DMX**, ajoute le canal (« + Roue de couleurs » / « + Roue de gobos ») : il est relié tout seul à la roue. Sinon, ouvre ses **Plages** et choisis la roue dans le menu « Roue ».
+3. Clique sur **« Créer un réglage par fente »** : un réglage par fente est créé, avec des valeurs DMX réparties régulièrement. Corrige ensuite les valeurs DMX d'après la doc.
+
+### Ouvrir un fichier .gdtf existant
+
+Sur l'accueil, **« Ouvrir un fichier .gdtf »** transforme un fichier GDTF (par exemple de GDTF Share ou de la bibliothèque d'une console) en fiche modifiable : modes, canaux, plages, réglages, roues avec couleurs et images, sous-éléments. Une fois corrigée, exporte-la à nouveau. Elle garde son identifiant, et le numéro de révision augmente.
+
+Ce qui n'est pas repris, et que l'appli signale à l'ouverture :
+- la forme 3D d'origine (l'appli recrée une structure simple) ;
+- les canaux virtuels (sans adresse DMX) ;
+- les plages « conditionnelles », dont le comportement dépend d'un autre canal (seule la première variante est gardée) ;
+- les canaux sur un 2e univers DMX.
+
+Les valeurs 16 bits sont arrondies à l'échelle 0-255.
+
+### Sous-éléments (pixels, calques d'effet…)
+
+Certains projecteurs ont plusieurs zones pilotées séparément : les pixels d'une barre LED, un anneau d'effet, un calque de fond… À l'étape 1, la section **Sous-éléments** permet d'en créer. Chacun devient, dans grandMA3, une sous-partie du projecteur avec sa propre intensité et ses propres couleurs.
+
+- **+ Ajouter un sous-élément** : crée un élément que tu nommes (ex. « Liquid », « Fond »).
+- **Barre LED / projecteur à pixels** : crée d'un coup N cellules identiques (RGB, RGBW, Intensité + RGB…) avec leurs canaux.
+- À l'étape « Canaux DMX », chaque canal a un menu pour choisir son élément, et « Ajouter sur » choisit où vont les canaux ajoutés par les boutons.
+
+Pan et Tilt restent toujours sur le projecteur principal. Une même fonction (ex. Intensité) peut exister une fois par élément.
+
+Tes projecteurs sont enregistrés automatiquement **dans le navigateur** de cet appareil. Pense à faire « Tout sauvegarder » (fichier .json) de temps en temps : si tu vides les données du navigateur, ils seront perdus.
+
+## Importer dans grandMA3
+
+1. Copie le `.gdtf` sur une clé USB dans `grandMA3/gma3_library/fixturetypes/`.
+2. Sur la console : **Patch** → onglet **Fixture Types** → **Import** → clé USB → ton fichier.
+3. Fais d'abord un essai sur **grandMA3 onPC** (gratuit).
+
+## Organisation des fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `index.html`, `css/style.css` | La page et son style |
+| `js/app.js` | L'interface (écrans, boutons) |
+| `js/attributes.js` | La liste des fonctions GDTF (Dimmer, Pan, ColorAdd_R…) avec leur libellé français |
+| `js/model.js` | Les données, les modèles de canaux « + … » et les vérifications |
+| `js/gdtf.js` | La fabrication du `description.xml` au format GDTF 1.1 (avec roues et images) |
+| `js/gdtf-import.js` | La lecture d'un `.gdtf` existant |
+| `js/color.js` | Conversion des couleurs (format GDTF CIE xyY) et des images en PNG |
+| `js/zip.js`, `js/unzip.js` | Écriture et lecture des zip (un .gdtf est un zip) |
+| `js/storage.js` | La sauvegarde dans le navigateur |
+| `sw.js`, `manifest.webmanifest` | Le mode hors ligne et l'installation en appli |
+| `serveur.ps1` | Le petit serveur local pour tester |
+
+Quand tu modifies des fichiers, change `VERSION` dans `sw.js` pour que l'appli installée se mette à jour.
+
+## Pas encore géré (pistes pour la suite)
+
+- Lecture directe d'une page PDF (tableau DMX) pour remplir la fiche
+- Canaux virtuels (dimmer virtuel sur un projecteur RGB sans dimmer)
+- Plages conditionnelles (comportement d'un canal qui dépend d'un autre)
+- Facettes des prismes

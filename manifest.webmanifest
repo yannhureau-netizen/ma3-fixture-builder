@@ -1,0 +1,14 @@
+{
+  "name": "MA3 Fixture Builder",
+  "short_name": "Fixture Builder",
+  "description": "Créer des fichiers GDTF de projecteurs pour grandMA3.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#14161b",
+  "theme_color": "#14161b",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
