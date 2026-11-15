@@ -2,6 +2,7 @@
 import { getAttribute, channelGeometry, partGeometryName, UNUSED, registerAttributes } from './attributes.js';
 import { hexToGdtfColor, dataUrlToBytes } from './color.js';
 import { makeZip } from './zip.js';
+import { functionGroups } from './model.js';
 
 const IDENTITY = '{1,0,0,0}{0,1,0,0}{0,0,1,0}{0,0,0,1}';
 
@@ -154,11 +155,14 @@ function modelsAndGeometries(fx) {
   return models + geos;
 }
 
-function channelXml(c, startAddr, fx, wheelNames) {
+function channelXml(c, startAddr, fx, wheelNames, chNames) {
   const geo = channelGeometry(c, fx);
   const chName = `${geo}_${c.attribute}`;
   const offset = c.fine ? `${startAddr},${startAddr + 1}` : `${startAddr}`;
-  const fns = [...c.functions].sort((a, b) => a.from - b.from);
+  // Variantes : la variante sans condition d'abord, puis chaque variante conditionnelle, triées
+  const groups = [...functionGroups(c).values()];
+  const fns = groups.flat();
+  const firstGroupSize = groups[0].length;
 
   // Noms uniques de plages
   const used = new Map();
@@ -169,10 +173,10 @@ function channelXml(c, startAddr, fx, wheelNames) {
     return k === 1 ? base : `${base} ${k}`;
   });
 
-  // La plage qui contient la valeur par défaut est la fonction initiale
+  // La plage qui contient la valeur par défaut (dans la première variante) est la fonction initiale
   const def = Number(c.defaultValue) || 0;
   let initIdx = 0;
-  fns.forEach((f, i) => { if (f.from <= def) initIdx = i; });
+  fns.slice(0, firstGroupSize).forEach((f, i) => { if (f.from <= def) initIdx = i; });
 
   let x = `          <DMXChannel DMXBreak="1" Offset="${offset}" InitialFunction="${esc(chName)}.${esc(c.attribute)}.${esc(names[initIdx])}" Highlight="None" Geometry="${esc(geo)}">\n`;
   x += `            <LogicalChannel Attribute="${esc(c.attribute)}" Snap="No" Master="None" MibFade="0" DMXChangeTimeLimit="0">\n`;
@@ -181,7 +185,9 @@ function channelXml(c, startAddr, fx, wheelNames) {
     const wName = f.wheel ? wheelNames.get(f.wheel) : null;
     const wheel = wName ? (fx.wheels || []).find(w => w.id === f.wheel) : null;
     const wheelAttr = wName ? ` Wheel="${esc(wName)}"` : '';
-    x += `              <ChannelFunction Name="${esc(names[i])}" Attribute="${esc(f.attribute)}" OriginalAttribute="" DMXFrom="${dmx(f.from)}" Default="${dmx(defVal)}" PhysicalFrom="${num(f.physFrom)}" PhysicalTo="${num(f.physTo, 1)}" RealFade="0" RealAcceleration="0"${wheelAttr}`;
+    const master = f.cond && chNames.get(f.cond.master);
+    const modeAttr = master ? ` ModeMaster="${esc(master)}" ModeFrom="${dmx(f.cond.from)}" ModeTo="${dmx(f.cond.to)}"` : '';
+    x += `              <ChannelFunction Name="${esc(names[i])}" Attribute="${esc(f.attribute)}" OriginalAttribute="" DMXFrom="${dmx(f.from)}" Default="${dmx(defVal)}" PhysicalFrom="${num(f.physFrom)}" PhysicalTo="${num(f.physTo, 1)}" RealFade="0" RealAcceleration="0"${wheelAttr}${modeAttr}`;
     const sets = [...f.sets].sort((a, b) => a.from - b.from);
     if (!sets.length) { x += '/>\n'; return; }
     x += '>\n';
@@ -201,10 +207,12 @@ function dmxModes(fx, wheelNames) {
   for (const m of fx.modes) {
     x += `      <DMXMode Name="${esc(cleanName(m.name, 'Mode'))}" Geometry="Base">\n`;
     x += '        <DMXChannels>\n';
+    // Nom GDTF de chaque canal (Géométrie_Attribut), pour les plages conditionnelles (ModeMaster)
+    const chNames = new Map(m.channels.filter(c => c.attribute !== UNUSED).map(c => [c.id, `${channelGeometry(c, fx)}_${c.attribute}`]));
     let addr = 1;
     for (const c of m.channels) {
       // Un canal inutilisé ne fait que réserver son adresse
-      if (c.attribute !== UNUSED) x += channelXml(c, addr, fx, wheelNames);
+      if (c.attribute !== UNUSED) x += channelXml(c, addr, fx, wheelNames, chNames);
       addr += c.fine ? 2 : 1;
     }
     x += '        </DMXChannels>\n';

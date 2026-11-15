@@ -148,7 +148,48 @@ export function linkWheels(fx, channels) {
   return channels;
 }
 
-// Copie profonde d'un canal avec de nouveaux identifiants
+// ---------- Plages conditionnelles ----------
+// Une plage peut avoir une condition : cond = { master: id d'un autre canal du mode, from, to }.
+// Elle ne s'applique que quand le canal « maître » est entre from et to (ex. index ou rotation du gobo
+// selon la position de la roue). Les plages qui ont la même condition forment une « variante »,
+// découpée de 0 à 255 indépendamment des autres.
+export function condKey(f) {
+  return f.cond && f.cond.master ? `${f.cond.master}|${f.cond.from}|${f.cond.to}` : '';
+}
+
+// Variantes d'un canal : Map clé -> plages triées (la variante sans condition en premier)
+export function functionGroups(c) {
+  const groups = new Map();
+  for (const f of c.functions) {
+    const k = condKey(f);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(f);
+  }
+  for (const list of groups.values()) list.sort((a, b) => a.from - b.from);
+  if (groups.has('') && groups.size > 1) {
+    const plain = groups.get('');
+    groups.delete('');
+    return new Map([['', plain], ...groups]);
+  }
+  return groups;
+}
+
+// Dernière valeur DMX d'une plage (dans sa variante)
+export function functionEnd(c, f) {
+  const k = condKey(f);
+  const list = c.functions.filter(x => condKey(x) === k).sort((a, b) => a.from - b.from);
+  const i = list.indexOf(f);
+  return i >= 0 && i < list.length - 1 ? list[i + 1].from - 1 : 255;
+}
+
+// Un réglage par fente de la roue, avec des valeurs DMX réparties sur la plage
+export function fillSetsFromWheel(c, fn, wheel) {
+  const to = functionEnd(c, fn);
+  const step = Math.max(1, Math.floor((to - fn.from + 1) / wheel.slots.length));
+  fn.sets = wheel.slots.map((s, k) => ({ id: uid(), name: s.name, from: Math.min(to, fn.from + k * step), slot: k + 1 }));
+}
+
+// Copie profonde d'un canal avec de nouveaux identifiants (les conditions gardent l'ancien maître)
 export function copyChannel(c) {
   const n = JSON.parse(JSON.stringify(c));
   n.id = uid();
@@ -156,13 +197,40 @@ export function copyChannel(c) {
   return n;
 }
 
+// Après copie, les conditions doivent viser les nouveaux canaux. Si le maître n'a pas été gardé,
+// on retire les variantes conditionnelles (en gardant une variante si le canal n'a que ça).
+function remapConditions(channels, idMap) {
+  for (const c of channels) {
+    for (const f of c.functions) if (f.cond) f.cond.master = idMap.get(f.cond.master) || '';
+    if (c.functions.some(f => f.cond && !f.cond.master)) {
+      const ok = c.functions.filter(f => !f.cond || f.cond.master);
+      if (ok.length) c.functions = ok;
+      else {
+        const firstKey = `${c.functions[0].cond.from}|${c.functions[0].cond.to}`;
+        c.functions = c.functions.filter(f => `${f.cond.from}|${f.cond.to}` === firstKey);
+        c.functions.forEach(f => { f.cond = null; });
+      }
+    }
+  }
+}
+
+export function cloneMode(m, name) {
+  const idMap = new Map();
+  const channels = m.channels.map(c => { const n = copyChannel(c); idMap.set(c.id, n.id); return n; });
+  remapConditions(channels, idMap);
+  return { id: uid(), name, channels };
+}
+
 // Nouveau mode à partir d'un autre : canaux choisis, éventuellement tous passés en 8 bits
 export function deriveMode(src, { name, to8bit, keepIds }) {
+  const idMap = new Map();
   const channels = src.channels.filter(c => keepIds.has(c.id)).map(c => {
     const n = copyChannel(c);
+    idMap.set(c.id, n.id);
     if (to8bit) n.fine = false;
     return n;
   });
+  remapConditions(channels, idMap);
   return { id: uid(), name, channels };
 }
 
@@ -230,21 +298,110 @@ export function validate(fx) {
 
       const fns = c.functions;
       if (!fns.length) { err(`${where} : aucune plage DMX.`); return; }
-      const sorted = [...fns].sort((a, b) => a.from - b.from);
-      if (sorted[0].from !== 0) err(`${where} : la première plage doit commencer à 0.`);
-      sorted.forEach((f, k) => {
-        if (!(f.from >= 0 && f.from <= 255)) err(`${where} : valeur de départ ${f.from} hors de 0–255.`);
-        if (k > 0 && f.from === sorted[k - 1].from) err(`${where} : deux plages commencent à ${f.from}.`);
-        if (!f.attribute.trim()) err(`${where} : une plage n'a pas de fonction.`);
-        const to = k < sorted.length - 1 ? sorted[k + 1].from - 1 : 255;
-        const wheel = f.wheel ? wheels.find(w => w.id === f.wheel) : null;
-        if (f.wheel && !wheel) warn(`${where} : la roue liée à la plage « ${f.name || f.attribute} » n'existe plus, le lien sera ignoré.`);
-        f.sets.forEach(s => {
-          if (s.from < f.from || s.from > to) err(`${where} : le réglage « ${s.name} » (${s.from}) sort de sa plage ${f.from}–${to}.`);
-          if (wheel && s.slot > wheel.slots.length) err(`${where} : le réglage « ${s.name} » vise la fente ${s.slot}, mais la roue « ${wheel.name} » n'en a que ${wheel.slots.length}.`);
+      for (const [key, sorted] of functionGroups(c)) {
+        let w = where;
+        if (key) {
+          const cond = sorted[0].cond;
+          const master = m.channels.find(x => x.id === cond.master);
+          if (!master) { err(`${where} : une variante dépend d'un canal qui n'existe plus dans ce mode.`); continue; }
+          if (master.id === c.id) err(`${where} : une variante ne peut pas dépendre de son propre canal.`);
+          if (!(cond.from >= 0 && cond.to <= 255 && cond.from <= cond.to)) err(`${where} : la condition d'une variante doit aller de 0 à 255, du plus petit au plus grand.`);
+          w = `${where} (variante quand « ${attributeLabel(master.attribute)} » est entre ${cond.from} et ${cond.to})`;
+        }
+        if (sorted[0].from !== 0) err(`${w} : la première plage doit commencer à 0.`);
+        sorted.forEach((f, k) => {
+          if (!(f.from >= 0 && f.from <= 255)) err(`${w} : valeur de départ ${f.from} hors de 0–255.`);
+          if (k > 0 && f.from === sorted[k - 1].from) err(`${w} : deux plages commencent à ${f.from}.`);
+          if (!f.attribute.trim()) err(`${w} : une plage n'a pas de fonction.`);
+          const to = k < sorted.length - 1 ? sorted[k + 1].from - 1 : 255;
+          const wheel = f.wheel ? wheels.find(x => x.id === f.wheel) : null;
+          if (f.wheel && !wheel) warn(`${w} : la roue liée à la plage « ${f.name || f.attribute} » n'existe plus, le lien sera ignoré.`);
+          f.sets.forEach(s => {
+            if (s.from < f.from || s.from > to) err(`${w} : le réglage « ${s.name} » (${s.from}) sort de sa plage ${f.from}–${to}.`);
+            if (wheel && s.slot > wheel.slots.length) err(`${w} : le réglage « ${s.name} » vise la fente ${s.slot}, mais la roue « ${wheel.name} » n'en a que ${wheel.slots.length}.`);
+          });
         });
-      });
+      }
     });
   }
   return out;
+}
+
+// ---------- Conseils (ce n'est pas bloquant, mais ça mérite un coup d'œil) ----------
+export function advise(fx) {
+  const general = new Set();
+  const byText = new Map(); // conseil -> modes concernés (un conseil répété n'est affiché qu'une fois)
+  const t = (text, modeName) => {
+    if (modeName == null) { general.add(text); return; }
+    if (!byText.has(text)) byText.set(text, []);
+    if (!byText.get(text).includes(modeName)) byText.get(text).push(modeName);
+  };
+  const wheels = fx.wheels || [];
+  const label = c => attributeLabel(c.attribute);
+  let unnamedSets = 0;
+
+  if (!String(fx.shortName || '').trim()) t('Nom court vide : MA3 affichera le nom complet dans les petites cases. Un nom court (16 caractères max) est plus lisible.');
+  if (!fx.thumbnail) t('Pas de photo : en ajouter une (étape « Projecteur ») aide à reconnaître le projecteur dans le Patch de MA3.');
+
+  for (const m of fx.modes) {
+    const mn = m.name || 'sans nom';
+    const real = m.channels.filter(c => c.attribute !== UNUSED);
+    const main = a => real.find(c => c.attribute === a && !c.part);
+
+    if (fx.kind === 'moving') {
+      for (const a of ['Pan', 'Tilt']) {
+        const c = main(a);
+        if (!c) { t(`lyre sans canal ${a}. C'est voulu ?`, mn); continue; }
+        if (!c.fine) t(`${a} en 8 bits, les mouvements seront moins fluides. Si la doc prévoit un canal « fine », coche « 16 bits ».`, mn);
+        if (c.defaultValue !== 128) t(`${a} par défaut à ${c.defaultValue}, le projecteur ne sera pas centré au démarrage (128 = milieu).`, mn);
+      }
+    }
+
+    const dim = main('Dimmer');
+    const hasColor = real.some(c => /^ColorAdd_|^ColorSub_/.test(c.attribute));
+    if (!dim && !real.some(c => c.attribute === 'Dimmer')) {
+      t(`pas de canal Intensité. MA3 créera un dimmer « virtuel »${hasColor ? ' à partir des couleurs' : ''}.`, mn);
+    }
+    if (dim && dim.defaultValue > 0) t(`Intensité par défaut à ${dim.defaultValue}, le projecteur s'allumera dès qu'il sera patché.`, mn);
+
+    for (const c of real) {
+      const shut = c.functions.filter(f => f.attribute === 'Shutter1');
+      if (shut.length && shut.every(f => Number(f.physFrom) <= 0 && Number(f.physTo) <= 0)) {
+        t(`${label(c)} : aucune plage « ouverte » (valeur physique 1). MA3 risque de considérer le shutter toujours fermé.`, mn);
+      }
+      const defFn = [...c.functions].filter(f => !f.cond).sort((a, b) => a.from - b.from).filter(f => f.from <= c.defaultValue).pop();
+      if (defFn && defFn.attribute === 'Shutter1' && Number(defFn.physTo) <= 0 && Number(defFn.physFrom) <= 0) {
+        t(`${label(c)} : la valeur par défaut (${c.defaultValue}) tombe dans une plage « fermée ». Le projecteur restera noir tant que le shutter n'est pas ouvert.`, mn);
+      }
+      for (const f of c.functions) {
+        const w = f.wheel ? wheels.find(x => x.id === f.wheel) : null;
+        if (w && /^(Color|Gobo)\d+$/.test(f.attribute) && !f.sets.some(s => s.slot > 0)) t(`${label(c)} : la plage « ${f.name || attributeLabel(f.attribute)} » est reliée à la roue « ${w.name} », mais aucun réglage ne vise une fente. Utilise « Créer un réglage par fente » pour que MA3 affiche les couleurs ou gobos.`, mn);
+        const m2 = /^(Color|Gobo)[12]$/.exec(f.attribute);
+        if (m2 && !f.wheel && wheels.some(x => x.kind === (m2[1] === 'Color' ? 'color' : 'gobo'))) {
+          t(`${label(c)} : la plage « ${f.name || attributeLabel(f.attribute)} » n'est reliée à aucune roue alors qu'il en existe une. Choisis-la dans le menu « Roue » de la plage.`, mn);
+        }
+        unnamedSets += f.sets.filter(s => !String(s.name || '').trim()).length;
+      }
+    }
+  }
+
+  if (unnamedSets) t(`${unnamedSets} réglage(s) sans nom au total (dans les plages) : dans MA3, ils s'afficheront « Réglage ». Ce n'est gênant que s'ils correspondent à une fonction utile.`);
+
+  for (const w of wheels) {
+    const used = fx.modes.some(m => m.channels.some(c => c.functions.some(f => f.wheel === w.id)));
+    if (!used) t(`La roue « ${w.name} » n'est reliée à aucun canal : MA3 ne l'utilisera pas.`);
+    if (w.kind === 'gobo') {
+      const missing = w.slots.filter((s, i) => !s.image && !(i === 0 && /ouvert|open/i.test(s.name))).length;
+      if (missing) t(`La roue « ${w.name} » : ${missing} gobo(s) sans image. Ajoute-les pour les voir dans MA3.`);
+    }
+  }
+
+  const perMode = [...byText].map(([text, modes]) => {
+    if (modes.length === 1 && fx.modes.length > 1) return `Mode « ${modes[0]} » : ${text}`;
+    if (modes.length === 1) return text.charAt(0).toUpperCase() + text.slice(1);
+    const names = modes.slice(0, 3).map(n => `« ${n} »`).join(', ');
+    const all = modes.length === fx.modes.length;
+    return `${all ? 'Tous les modes' : `${modes.length} modes (${names}${modes.length > 3 ? '…' : ''})`} : ${text}`;
+  });
+  return [...general, ...perMode];
 }

@@ -1,6 +1,6 @@
 // Modèles de départ proposés quand on crée un nouveau projecteur.
 // Chacun produit une fiche complète que l'on ajuste ensuite d'après la doc du fabricant.
-import { newFixture, newWheel, newChannel, uid, TEMPLATES, makeCellChannels, linkWheels } from './model.js';
+import { newFixture, newWheel, newChannel, uid, TEMPLATES, makeCellChannels, linkWheels, fillSetsFromWheel } from './model.js';
 
 // Canaux à partir des boutons « + … » de l'appli
 function chans(...keys) {
@@ -15,7 +15,13 @@ function base(props) {
 }
 
 function addMode(fx, name, channels) {
-  fx.modes.push({ id: uid(), name, channels: linkWheels(fx, channels) });
+  linkWheels(fx, channels);
+  // Roues : un réglage par fente, déjà relié (les valeurs DMX sont à ajuster d'après la doc)
+  for (const c of channels) for (const fn of c.functions) {
+    const w = fn.wheel && fx.wheels.find(x => x.id === fn.wheel);
+    if (w && /^(Color|Gobo)\d+$/.test(fn.attribute)) fillSetsFromWheel(c, fn, w);
+  }
+  fx.modes.push({ id: uid(), name, channels });
 }
 
 export const STARTERS = [

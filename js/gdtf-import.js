@@ -4,7 +4,7 @@
 import { readZip } from './unzip.js';
 import { gdtfColorToHex, toPngDataUrl } from './color.js';
 import { ATTRIBUTES, UNUSED, RESERVED_GEOMETRIES } from './attributes.js';
-import { uid, newFixture, newChannel } from './model.js';
+import { uid, newFixture, newChannel, condKey } from './model.js';
 
 const LIBRARY = new Set(ATTRIBUTES.map(a => a.name));
 const PAN_TILT = new Set(['Pan', 'Tilt', 'PanRotate', 'TiltRotate']);
@@ -25,16 +25,25 @@ function parseDmx(v) {
 // Après arrondi à 0-255, deux plages peuvent tomber sur la même valeur : on les décale d'un cran
 // pour que chacune garde sa place, puis on recale les réglages dans leur plage.
 function tidyFunctions(functions) {
-  functions.sort((a, b) => a._precise - b._precise);
   let shifted = false;
-  functions.forEach((f, i) => {
-    if (i > 0 && f.from <= functions[i - 1].from) { f.from = Math.min(255, functions[i - 1].from + 1); shifted = true; }
-  });
-  functions.forEach((f, i) => {
-    const to = i < functions.length - 1 ? functions[i + 1].from - 1 : 255;
-    f.sets.forEach(s => { s.from = Math.max(f.from, Math.min(to, s.from)); });
-    delete f._precise;
-  });
+  // chaque variante (même condition) est découpée indépendamment
+  const groups = new Map();
+  for (const f of functions) {
+    const k = condKey(f);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(f);
+  }
+  for (const list of groups.values()) {
+    list.sort((a, b) => a._precise - b._precise);
+    list.forEach((f, i) => {
+      if (i > 0 && f.from <= list[i - 1].from) { f.from = Math.min(255, list[i - 1].from + 1); shifted = true; }
+    });
+    list.forEach((f, i) => {
+      const to = i < list.length - 1 ? list[i + 1].from - 1 : 255;
+      f.sets.forEach(s => { s.from = Math.max(f.from, Math.min(to, s.from)); });
+      delete f._precise;
+    });
+  }
   return shifted;
 }
 
@@ -199,6 +208,7 @@ export async function importGdtf(file) {
   let inexact = false;
   let shiftedRanges = 0;
   let conditional = 0;
+  let resolvedVariants = 0;
   let skippedBreaks = 0;
   let virtualCount = 0;
   let wideCount = 0;
@@ -275,15 +285,15 @@ export async function importGdtf(file) {
       if (PAN_TILT.has(chAttr)) anyPanTilt = true;
       const functions = [];
       const byName = new Map();
-      let modeKey = null; // plages conditionnelles (ModeMaster) : on garde la première variante
       for (const lc of lcs) {
         for (const cf of lc.querySelectorAll(':scope > ChannelFunction')) {
+          // Plage conditionnelle : on note le canal maître (résolu une fois tous les canaux du mode lus)
           const mm = attr(cf, 'ModeMaster');
-          if (mm) {
-            const key = `${mm}|${attr(cf, 'ModeFrom')}|${attr(cf, 'ModeTo')}`;
-            if (modeKey === null) modeKey = key;
-            if (key !== modeKey) { conditional++; continue; }
-          }
+          const cond = mm ? {
+            path: mm.split('.')[0],
+            from: (parseDmx(attr(cf, 'ModeFrom', '0/1')) || { value: 0 }).value,
+            to: (parseDmx(attr(cf, 'ModeTo', '255/1')) || { value: 255 }).value,
+          } : null;
           const from = parseDmx(attr(cf, 'DMXFrom', '0/1')) || { value: 0, exact: true, precise: 0 };
           if (!from.exact) inexact = true;
           const wheelName = attr(cf, 'Wheel');
@@ -296,6 +306,8 @@ export async function importGdtf(file) {
             physTo: numOr(attr(cf, 'PhysicalTo'), 1),
             wheel: wheelName ? (wheelIds.get(wheelName) || '') : '',
             sets: [],
+            cond: null,
+            _cond: cond,
             _precise: from.precise,
           };
           for (const cs of cf.querySelectorAll(':scope > ChannelSet')) {
@@ -308,8 +320,7 @@ export async function importGdtf(file) {
           byName.set(fn.name, cf);
         }
       }
-      if (!functions.length) functions.push({ id: uid(), name: '', attribute: chAttr, from: 0, physFrom: 0, physTo: 1, wheel: '', sets: [], _precise: 0 });
-      if (tidyFunctions(functions)) shiftedRanges++;
+      if (!functions.length) functions.push({ id: uid(), name: '', attribute: chAttr, from: 0, physFrom: 0, physTo: 1, wheel: '', sets: [], cond: null, _precise: 0 });
 
       // Valeur par défaut : celle de la fonction initiale
       const initName = attr(r.ch, 'InitialFunction').split('.').pop();
@@ -327,8 +338,36 @@ export async function importGdtf(file) {
         fine,
         defaultValue: def ? def.value : 0,
         functions,
+        _geom: r.geom,
       });
       next = start + (fine ? 2 : 1);
+    }
+
+    // Résolution des plages conditionnelles : le maître est désigné par « Géométrie_Attribut »
+    const byKey = new Map();
+    for (const ch of channels) {
+      if (!ch._geom) continue;
+      const k = `${ch._geom}_${ch.attribute}`;
+      if (!byKey.has(k)) byKey.set(k, []);
+      byKey.get(k).push(ch);
+    }
+    for (const ch of channels) {
+      let unresolvedKey = null;
+      ch.functions = ch.functions.filter(fn => {
+        const c = fn._cond;
+        delete fn._cond;
+        if (!c) return true;
+        const cands = byKey.get(c.path) || [];
+        const master = cands.find(x => x.part === ch.part && x !== ch) || cands.find(x => x !== ch);
+        if (master) { fn.cond = { master: master.id, from: c.from, to: c.to }; resolvedVariants++; return true; }
+        // Maître introuvable : on garde la première variante, sans condition
+        const k = `${c.path}|${c.from}|${c.to}`;
+        if (unresolvedKey === null) unresolvedKey = k;
+        if (k !== unresolvedKey) { conditional++; return false; }
+        return true;
+      });
+      if (tidyFunctions(ch.functions)) shiftedRanges++;
+      delete ch._geom;
     }
     fx.modes.push({ id: uid(), name: modeName, channels });
   }
@@ -338,7 +377,8 @@ export async function importGdtf(file) {
 
   if (inexact) notes.push('Certaines valeurs 16 ou 24 bits ont été arrondies à l\'échelle 0-255 de l\'appli. Vérifie les plages très serrées.');
   if (shiftedRanges) notes.push(`Dans ${shiftedRanges} canal(aux), des plages très serrées tombaient sur la même valeur après arrondi : elles ont été décalées d'un cran.`);
-  if (conditional) notes.push(`${conditional} plage(s) « conditionnelle(s) » (dont le comportement dépend d'un autre canal, ex. index ou rotation du gobo selon la roue) n'ont pas été reprises : l'appli garde la première variante.`);
+  if (resolvedVariants) notes.push(`${resolvedVariants} plage(s) conditionnelle(s) reprises (comportement qui dépend d'un autre canal, ex. index ou rotation du gobo selon la roue). Tu les trouves dans les « Plages » des canaux concernés.`);
+  if (conditional) notes.push(`${conditional} plage(s) conditionnelle(s) dont le canal maître est introuvable n'ont pas été reprises : l'appli garde la première variante.`);
   if (wideCount) notes.push(`${wideCount} canal(aux) en 24 bits ou plus ont été réduits à 16 bits.`);
   if (virtualCount) notes.push(`${virtualCount} canal(aux) virtuel(s) (sans adresse DMX, ex. dimmer virtuel) n'ont pas été repris.`);
   if (skippedBreaks) notes.push(`${skippedBreaks} canal(aux) sur un 2e univers DMX (DMX Break) ne sont pas gérés et ont été ignorés.`);

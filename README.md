@@ -33,14 +33,21 @@ Pour arrêter le serveur : `Ctrl+C` dans la fenêtre PowerShell.
 
 > Ouvrir directement `index.html` en double-cliquant ne marche pas : les navigateurs bloquent les modules JavaScript en `file://`. Il faut passer par le serveur.
 
-## Utilisation en 4 étapes
+## Utilisation en 5 étapes
+
+Sur l'accueil, la recherche (fabricant, nom… sans tenir compte des accents) et le tri (récents, fabricant, nom) aident à retrouver une fiche.
 
 En cliquant sur **« + Nouveau projecteur »**, choisis un point de départ : fiche vide, ou modèle tout prêt (PAR LED RGB / RGBW / RGBWA+UV, lyre spot / wash / beam, barre LED 8 pixels, découpe LED, stroboscope). Le modèle donne des modes et des canaux courants, que tu ajustes ensuite d'après la doc.
 
 1. **Projecteur** : fabricant, nom, lyre ou fixe, type de source. Facultatif : une **photo** (affichée dans le Patch de grandMA3), les **dimensions** (taille dans la vue 3D) et le **poids**.
 2. **Roues** (facultatif) : roues de couleurs, de gobos, prismes… avec la couleur ou l'image de chaque fente.
 3. **Canaux DMX** : ajoute les canaux dans l'ordre de la doc du fabricant avec les boutons « + Intensité », « + Pan / Tilt 16 bits », « + RGB »… Le bouton **Plages** permet de découper un canal (ex. 0–7 fermé, 8–15 ouvert, 16–249 strobe), et d'ajouter des **réglages nommés** (un gobo, une couleur). La case « Réglages avancés » affiche les valeurs physiques (degrés, Hz…). « + Canal inutilisé » réserve une adresse sans fonction.
-4. **Exporter** : l'appli vérifie la fiche, puis télécharge le fichier `.gdtf`.
+4. **Tester** : un fader par canal, comme sur la console. L'appli affiche la plage et le réglage actifs, la valeur physique (degrés, Hz, %…) et un aperçu du résultat : couleur, intensité, shutter ou strobe, gobo, Pan/Tilt, sous-éléments. Les boutons « Valeurs par défaut », « Plein feu » et « Tout à 0 » donnent un point de départ.
+5. **Exporter** : l'appli vérifie la fiche (erreurs bloquantes et **conseils**, par exemple « Pan en 8 bits », « Intensité par défaut à 255 », « roue reliée à aucun canal »), puis télécharge le fichier `.gdtf`. Le bouton **« Fiche DMX imprimable »** donne un document propre (photo, caractéristiques, roues, tableau de chaque mode) à imprimer ou à enregistrer en PDF.
+
+### Plages conditionnelles (variantes)
+
+Sur certains projecteurs, un canal change de comportement selon un autre canal. Par exemple, le canal « position du gobo » fait un index quand la roue est sur un gobo fixe, et une rotation quand elle est sur un gobo tournant. Dans les **Plages** d'un canal, **« + Variante conditionnelle »** (visible avec « Réglages avancés ») ajoute un jeu de plages actif seulement quand un autre canal est entre deux valeurs. Chaque variante se découpe de 0 à 255 indépendamment. Le testeur en tient compte, et l'export écrit les attributs GDTF `ModeMaster`, `ModeFrom` et `ModeTo`.
 
 ### Mode dérivé
 
@@ -61,7 +68,7 @@ Sur l'accueil, **« Ouvrir un fichier .gdtf »** transforme un fichier GDTF (par
 Ce qui n'est pas repris, et que l'appli signale à l'ouverture :
 - la forme 3D d'origine (l'appli recrée une structure simple) ;
 - les canaux virtuels (sans adresse DMX) ;
-- les plages « conditionnelles », dont le comportement dépend d'un autre canal (seule la première variante est gardée) ;
+- les plages conditionnelles dont le canal maître est introuvable (les autres sont reprises) ;
 - les canaux sur un 2e univers DMX.
 
 Les valeurs 16 bits sont arrondies à l'échelle 0-255.
@@ -93,6 +100,8 @@ Tes projecteurs sont enregistrés automatiquement **dans le navigateur** de cet 
 | `js/attributes.js` | La liste des fonctions GDTF (Dimmer, Pan, ColorAdd_R…) avec leur libellé français |
 | `js/model.js` | Les données, les modèles de canaux « + … », le mode dérivé et les vérifications |
 | `js/starters.js` | Les modèles de départ (PAR, lyres, barre LED…) |
+| `js/tester.js` | Le testeur DMX : plage active, valeur physique, aperçu |
+| `js/print.js` | La fiche DMX imprimable |
 | `js/gdtf.js` | La fabrication du `description.xml` au format GDTF 1.1 (avec roues et images) |
 | `js/gdtf-import.js` | La lecture d'un `.gdtf` existant |
 | `js/color.js` | Conversion des couleurs (format GDTF CIE xyY) et des images en PNG |
@@ -107,5 +116,5 @@ Quand tu modifies des fichiers, change `VERSION` dans `sw.js` pour que l'appli i
 
 - Lecture directe d'une page PDF (tableau DMX) pour remplir la fiche
 - Canaux virtuels (dimmer virtuel sur un projecteur RGB sans dimmer)
-- Plages conditionnelles (comportement d'un canal qui dépend d'un autre)
+- Synchronisation des fiches entre appareils
 - Facettes des prismes

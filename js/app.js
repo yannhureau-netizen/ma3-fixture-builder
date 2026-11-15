@@ -1,5 +1,7 @@
 import { ATTRIBUTES, getAttribute, attributeLabel, registerAttributes, extraAttributes, isKnownAttribute, UNUSED } from './attributes.js';
-import { newFixture, newChannel, newFunction, newWheel, newSlot, uid, TEMPLATES, CELL_TEMPLATES, makeCellChannels, footprint, validate, linkWheels, deriveMode } from './model.js';
+import { newFixture, newChannel, newFunction, newWheel, newSlot, uid, TEMPLATES, CELL_TEMPLATES, makeCellChannels, footprint, validate, advise, linkWheels, deriveMode, cloneMode, functionGroups, functionEnd, condKey, fillSetsFromWheel } from './model.js';
+import { evaluate, describe, preview } from './tester.js';
+import { renderPrintSheet } from './print.js';
 import { STARTERS, STARTER_ICONS, buildStarter } from './starters.js';
 import { buildGdtf, buildDescriptionXml, gdtfFileName, makeUuid } from './gdtf.js';
 import { importGdtf } from './gdtf-import.js';
@@ -10,10 +12,12 @@ const app = document.getElementById('app');
 
 const state = {
   fixtures: loadAll(),
-  view: 'home',          // 'home' | 'starter' (choix du modèle) | 'edit'
+  view: 'home',          // 'home' | 'starter' (choix du modèle) | 'edit' | 'print' (fiche imprimable)
+  search: '',            // recherche sur l'accueil
+  testValues: {},        // testeur DMX : valeur de chaque canal (par id)
   derive: null,          // panneau « mode dérivé » : { name, to8bit, keep: Set(id) }
   currentId: null,
-  step: 1,               // 1 Projecteur, 2 Roues, 3 Canaux, 4 Export
+  step: 1,               // 1 Projecteur, 2 Roues, 3 Canaux, 4 Tester, 5 Export
   importNotes: [],       // remarques affichées après l'ouverture d'un .gdtf
   modeIdx: 0,
   open: new Set(),       // canaux dont les plages sont dépliées
@@ -70,14 +74,8 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-function sortedFunctions(c) {
-  return [...c.functions].sort((a, b) => a.from - b.from);
-}
-function rangeEnd(c, f) {
-  const s = sortedFunctions(c);
-  const i = s.indexOf(f);
-  return i < s.length - 1 ? s[i + 1].from - 1 : 255;
-}
+// Fin d'une plage (dans sa variante, si le canal a des plages conditionnelles)
+const rangeEnd = functionEnd;
 function addressLabel(m, ci) {
   let a = 1;
   for (let i = 0; i < ci; i++) a += m.channels[i].fine ? 2 : 1;
@@ -119,8 +117,50 @@ function selectField(label, bind, value, options) {
 }
 
 // ---------- écran d'accueil ----------
+const SORTS = [['recent', 'Modifiés récemment'], ['maker', 'Fabricant (A → Z)'], ['name', 'Nom (A → Z)']];
+
+function sortedFixtures() {
+  const by = state.prefs.sort || 'recent';
+  const txt = s => String(s || '').toLocaleLowerCase('fr');
+  const list = [...state.fixtures];
+  if (by === 'maker') list.sort((a, b) => txt(a.manufacturer).localeCompare(txt(b.manufacturer), 'fr') || txt(a.name).localeCompare(txt(b.name), 'fr'));
+  else if (by === 'name') list.sort((a, b) => txt(a.name).localeCompare(txt(b.name), 'fr'));
+  else list.sort((a, b) => b.updatedAt - a.updatedAt);
+  return list;
+}
+
+// Recherche sans tenir compte des accents ni des majuscules, sur fabricant, nom, nom court et notes
+function matches(f, q) {
+  const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const hay = norm(`${f.manufacturer} ${f.name} ${f.shortName} ${f.description}`);
+  return norm(q).split(/\s+/).filter(Boolean).every(w => hay.includes(w));
+}
+
+function cardHtml(f) {
+  return `
+      <article class="card">
+        <div class="card-body" data-action="open" data-id="${f.id}" role="button" tabindex="0">
+          ${f.thumbnail ? `<img class="card-thumb" src="${f.thumbnail}" alt="">` : ''}
+          <div class="card-maker">${esc(f.manufacturer) || '<i>Fabricant ?</i>'}</div>
+          <div class="card-name">${esc(f.name) || '<i>Sans nom</i>'}</div>
+          <div class="muted small">${f.kind === 'moving' ? 'Lyre' : 'Fixe'} · ${f.modes.length} mode${f.modes.length > 1 ? 's' : ''} · ${f.modes.slice(0, 6).map(m => footprint(m) + ' adr.').join(', ')}${f.modes.length > 6 ? '…' : ''}${f.parts && f.parts.length ? ` · ${f.parts.length} sous-élément${f.parts.length > 1 ? 's' : ''}` : ''}</div>
+        </div>
+        <div class="card-tools">
+          <button class="btn small" data-action="open" data-id="${f.id}">Ouvrir</button>
+          <button class="btn small" data-action="dup-fixture" data-id="${f.id}">Dupliquer</button>
+          <button class="btn small danger" data-action="del-fixture" data-id="${f.id}">Supprimer</button>
+        </div>
+      </article>`;
+}
+
+function renderCards() {
+  const list = sortedFixtures().filter(f => matches(f, state.search));
+  if (!list.length) return '<div id="cards" class="empty small-empty">Aucun projecteur ne correspond à cette recherche.</div>';
+  return `<div id="cards" class="cards">${list.map(cardHtml).join('')}</div>`;
+}
+
 function renderHome() {
-  const list = [...state.fixtures].sort((a, b) => b.updatedAt - a.updatedAt);
+  const list = state.fixtures;
   return `
   <section class="home">
     <div class="home-head">
@@ -135,27 +175,23 @@ function renderHome() {
         ${list.length ? '<button class="btn" data-action="backup-all">Tout sauvegarder</button>' : ''}
       </div>
     </div>
-    ${list.length ? `<div class="cards">${list.map(f => `
-      <article class="card">
-        <div class="card-body" data-action="open" data-id="${f.id}" role="button" tabindex="0">
-          ${f.thumbnail ? `<img class="card-thumb" src="${f.thumbnail}" alt="">` : ''}
-          <div class="card-maker">${esc(f.manufacturer) || '<i>Fabricant ?</i>'}</div>
-          <div class="card-name">${esc(f.name) || '<i>Sans nom</i>'}</div>
-          <div class="muted small">${f.kind === 'moving' ? 'Lyre' : 'Fixe'} · ${f.modes.length} mode${f.modes.length > 1 ? 's' : ''} · ${f.modes.map(m => footprint(m) + ' adr.').join(', ')}${f.parts && f.parts.length ? ` · ${f.parts.length} sous-élément${f.parts.length > 1 ? 's' : ''}` : ''}</div>
-        </div>
-        <div class="card-tools">
-          <button class="btn small" data-action="open" data-id="${f.id}">Ouvrir</button>
-          <button class="btn small" data-action="dup-fixture" data-id="${f.id}">Dupliquer</button>
-          <button class="btn small danger" data-action="del-fixture" data-id="${f.id}">Supprimer</button>
-        </div>
-      </article>`).join('')}</div>` : `
+    ${list.length ? `
+    <div class="home-tools">
+      <input type="search" class="search" data-ui="search" value="${esc(state.search)}" placeholder="Rechercher (fabricant, nom…)" aria-label="Rechercher un projecteur">
+      <label class="mini">Trier
+        <select data-sort>${SORTS.map(([v, l]) => `<option value="${v}"${(state.prefs.sort || 'recent') === v ? ' selected' : ''}>${l}</option>`).join('')}</select>
+      </label>
+      <span class="muted small">${list.length} projecteur${list.length > 1 ? 's' : ''}</span>
+    </div>
+    ${renderCards()}` : `
       <div class="empty">
         <h2>Comment ça marche ?</h2>
         <ol class="steps-help">
           <li><b>Projecteur</b> : fabricant, nom, lyre ou fixe.</li>
           <li><b>Roues</b> (facultatif) : couleurs et images des gobos.</li>
           <li><b>Canaux DMX</b> : ajoute les canaux dans l'ordre de la doc du fabricant, avec les boutons tout prêts.</li>
-          <li><b>Exporter</b> : télécharge le fichier .gdtf et importe-le dans grandMA3.</li>
+          <li><b>Tester</b> : bouge les faders et vérifie que chaque valeur fait ce que dit la doc.</li>
+          <li><b>Exporter</b> : télécharge le fichier .gdtf et importe-le dans grandMA3, ou imprime la fiche DMX.</li>
         </ol>
         <p class="muted small">Tu as déjà un fichier .gdtf à corriger ? Utilise « Ouvrir un fichier .gdtf » en haut.</p>
         <button class="btn primary big" data-action="new">Créer mon premier projecteur</button>
@@ -197,7 +233,7 @@ function renderEditor() {
   const f = fx();
   const issues = validate(f);
   const errors = issues.filter(i => i.level === 'error').length;
-  const steps = ['Projecteur', 'Roues', 'Canaux DMX', 'Exporter'];
+  const steps = ['Projecteur', 'Roues', 'Canaux DMX', 'Tester', 'Exporter'];
   const last = steps.length;
   return `
   <div class="topbar">
@@ -216,7 +252,7 @@ function renderEditor() {
     <button class="btn small" data-action="dismiss-notes">J'ai compris</button>
   </div>` : ''}
   <section class="panel">
-    ${state.step === 1 ? renderStep1(f) : state.step === 2 ? renderWheels(f) : state.step === 3 ? renderStep2(f) : renderStep3(f, issues)}
+    ${state.step === 1 ? renderStep1(f) : state.step === 2 ? renderWheels(f) : state.step === 3 ? renderStep2(f) : state.step === 4 ? renderTester(f) : renderStep3(f, issues)}
   </section>
   <div class="footer-nav">
     ${state.step > 1 ? `<button class="btn" data-action="step" data-step="${state.step - 1}">← Étape précédente</button>` : '<span></span>'}
@@ -476,12 +512,30 @@ function renderRanges(fxObj, c, base) {
     return '<div class="ranges"><p class="muted small">Canal inutilisé : il réserve juste son adresse DMX, rien n\'est envoyé à MA3 pour lui.</p></div>';
   }
   const adv = state.prefs.advanced;
-  // On affiche les plages triées, mais on garde l'index réel pour l'édition.
-  const order = c.functions.map((f, i) => ({ f, i })).sort((a, b) => a.f.from - b.f.from);
+  const modeObj = getPath(fxObj, base.split('.').slice(0, 2).join('.'));
+  const others = modeObj.channels.filter(x => x.id !== c.id && x.attribute !== UNUSED);
+  // Plages groupées par variante (sans condition d'abord), triées ; on garde l'index réel pour l'édition.
+  const groups = [...functionGroups(c).entries()];
+  const multi = groups.length > 1;
+  const variantHead = (key, list) => {
+    if (!key) return multi ? '<div class="variant-head"><b>Cas général</b> <span class="muted small">(quand aucune variante ci-dessous ne s\'applique)</span></div>' : '';
+    const cond = list[0].cond;
+    return `
+    <div class="variant-head cond">
+      <b>Variante</b> active quand
+      <select data-cond="master" data-path="${base}" data-gkey="${key}" aria-label="Canal maître">
+        ${others.map((o, k) => `<option value="${o.id}"${o.id === cond.master ? ' selected' : ''}>${esc(addressLabel(modeObj, modeObj.channels.indexOf(o)))} · ${esc(attributeLabel(o.attribute))}</option>`).join('')}
+      </select>
+      est entre <input type="number" min="0" max="255" data-cond="from" data-path="${base}" data-gkey="${key}" value="${cond.from}" aria-label="De">
+      et <input type="number" min="0" max="255" data-cond="to" data-path="${base}" data-gkey="${key}" value="${cond.to}" aria-label="À">
+      <button class="icon danger" title="Supprimer cette variante" data-action="variant-del" data-path="${base}" data-gkey="${key}">✕</button>
+    </div>`;
+  };
   return `
   <div class="ranges">
     <p class="muted small">Découpe le canal comme dans la doc : chaque plage commence à une valeur DMX et va jusqu'à la suivante.</p>
-    ${order.map(({ f, i }) => {
+    ${groups.map(([key, list]) => `<div class="variant${key ? ' is-cond' : ''}">${variantHead(key, list)}${list.map(f => {
+      const i = c.functions.indexOf(f);
       const fb = `${base}.functions.${i}`;
       const wheel = f.wheel ? fxObj.wheels.find(w => w.id === f.wheel) : null;
       return `
@@ -528,7 +582,13 @@ function renderRanges(fxObj, c, base) {
         </div>
       </div>`;
     }).join('')}
-    <button class="btn small" data-action="fn-add" data-path="${base}">+ Ajouter une plage</button>
+    <button class="btn small" data-action="fn-add" data-path="${base}" data-gkey="${key}">+ Ajouter une plage${key ? ' à cette variante' : ''}</button>
+    </div>`).join('')}
+    ${(adv || multi) && others.length ? `
+    <div class="variant-add">
+      <button class="btn small ghost" data-action="variant-add" data-path="${base}">+ Variante conditionnelle</button>
+      <span class="muted small">Pour un canal dont le comportement change selon un autre canal (ex. index ou rotation du gobo selon la position de la roue).</span>
+    </div>` : ''}
   </div>`;
 }
 
@@ -536,10 +596,21 @@ function renderStep3(f, issues) {
   const errors = issues.filter(i => i.level === 'error');
   const warns = issues.filter(i => i.level === 'warn');
   return `
-  <h2>4. Exporter</h2>
+  <h2>5. Exporter</h2>
   ${errors.length ? `<div class="alert error"><b>À corriger avant d'exporter :</b><ul>${errors.map(e => `<li>${esc(e.text)}</li>`).join('')}</ul></div>` :
     '<div class="alert ok"><b>Tout est bon !</b> Le fichier peut être exporté.</div>'}
   ${warns.length ? `<div class="alert warn"><ul>${warns.map(e => `<li>${esc(e.text)}</li>`).join('')}</ul></div>` : ''}
+  ${(() => {
+    const tips = advise(f);
+    if (!tips.length) return '';
+    const shown = tips.slice(0, 40);
+    return `
+  <details class="alert tip"${tips.length <= 8 ? ' open' : ''}>
+    <summary><b>Conseils (${tips.length})</b> <span class="muted small">— rien de bloquant, mais ça vaut un coup d'œil</span></summary>
+    <ul>${shown.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+    ${tips.length > shown.length ? `<p class="muted small">… et ${tips.length - shown.length} autre(s).</p>` : ''}
+  </details>`;
+  })()}
 
   <div class="summary">
     <div><span class="muted small">Projecteur</span><b>${esc(f.manufacturer)} ${esc(f.name)}</b></div>
@@ -548,6 +619,7 @@ function renderStep3(f, issues) {
 
   <div class="row">
     <button class="btn primary big" data-action="export"${errors.length ? ' disabled' : ''}>⬇ Télécharger ${esc(gdtfFileName(f))}</button>
+    <button class="btn" data-action="print">🖨 Fiche DMX imprimable</button>
     <button class="btn" data-action="backup-one">Sauvegarder le projet (.json)</button>
   </div>
 
@@ -566,11 +638,121 @@ function renderStep3(f, issues) {
   </details>`;
 }
 
+// ---------- étape 4 : testeur DMX ----------
+function testValue(c) {
+  const v = state.testValues[c.id];
+  return v == null ? (Number(c.defaultValue) || 0) : v;
+}
+
+function valueOfFor(m) {
+  const byId = new Map(m.channels.map(c => [c.id, c]));
+  return id => (byId.has(id) ? testValue(byId.get(id)) : null);
+}
+
+const fr = (x, d = 1) => Number(x).toLocaleString('fr-FR', { maximumFractionDigits: d });
+
+function previewHtml(f, m) {
+  const p = preview(f, m, valueOfFor(m));
+  const main = p.zones[0];
+  const parts = p.zones.slice(1);
+  const blink = z => (z.strobe ? ` strobe" style="background:${z.css};animation-duration:${Math.max(0.04, 1 / z.strobe).toFixed(3)}s` : `" style="background:${z.css}`);
+  const state1 = main.closed ? 'Shutter fermé' : main.strobe ? `Strobe ${fr(main.strobe)} Hz` : `Intensité ${Math.round(main.level * 100)} %`;
+  return `
+    <div class="t-stage">
+      <div class="t-beam${blink(main)}">${main.gobo ? `<img src="${main.gobo}" alt="Gobo actif">` : ''}</div>
+      <div class="t-info">
+        <b>${state1}</b>
+        ${p.pan != null ? `<div>Pan ${fr(p.pan)}°</div>` : ''}
+        ${p.tilt != null ? `<div>Tilt ${fr(p.tilt)}°</div>` : ''}
+      </div>
+    </div>
+    ${parts.length ? `<div class="t-parts">${parts.map(z => `<div class="t-part" title="${esc(z.name)}"><span class="t-dot${blink(z)}"></span><small>${esc(z.name)}</small></div>`).join('')}</div>` : ''}`;
+}
+
+function renderTester(f) {
+  if (state.modeIdx >= f.modes.length) state.modeIdx = 0;
+  const m = mode();
+  const mi = state.modeIdx;
+  const valueOf = valueOfFor(m);
+  return `
+  <h2>4. Tester</h2>
+  <p class="muted">Bouge les faders comme sur la console : l'appli affiche la plage et le réglage actifs, avec un aperçu du résultat. Vérifie que ça correspond à la doc du fabricant.</p>
+  <div class="tabs">
+    ${f.modes.map((md, i) => `<button class="tab${i === mi ? ' active' : ''}" data-action="mode" data-idx="${i}">${esc(md.name || 'Mode')} <span class="muted small">${footprint(md)} adr.</span></button>`).join('')}
+  </div>
+  ${m.channels.length ? `
+  <div class="tester">
+    <div class="t-preview" id="t-preview">${previewHtml(f, m)}</div>
+    <div class="t-list">
+      <div class="row t-actions">
+        <button class="btn small" data-action="test-defaults">Valeurs par défaut</button>
+        <button class="btn small" data-action="test-full">Plein feu</button>
+        <button class="btn small" data-action="test-zero">Tout à 0</button>
+      </div>
+      ${m.channels.map((c, ci) => {
+        const v = testValue(c);
+        if (c.attribute === UNUSED) return `<div class="t-row unused"><span class="addr">${addressLabel(m, ci)}</span><span class="t-name muted">Canal inutilisé</span></div>`;
+        return `
+        <div class="t-row">
+          <span class="addr">${addressLabel(m, ci)}</span>
+          <span class="t-name">${esc(channelCaption(f, c))}</span>
+          <input type="range" min="0" max="255" value="${v}" data-tval="${c.id}" aria-label="Valeur de ${esc(attributeLabel(c.attribute))}">
+          <input type="number" min="0" max="255" value="${v}" data-tval="${c.id}" class="t-num" aria-label="Valeur">
+          <span class="t-out" data-tout="${c.id}">${esc(describe(c, evaluate(c, v, valueOf), f))}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : '<div class="empty small-empty">Ce mode n\'a pas encore de canal.</div>'}`;
+}
+
+// Mise à jour pendant qu'on bouge un fader (sans tout redessiner, pour ne pas lâcher le fader)
+function updateTester() {
+  const f = fx();
+  const m = mode();
+  const valueOf = valueOfFor(m);
+  for (const c of m.channels) {
+    const el = app.querySelector(`[data-tout="${c.id}"]`);
+    if (el) el.textContent = describe(c, evaluate(c, testValue(c), valueOf), f);
+  }
+  const pv = document.getElementById('t-preview');
+  if (pv) pv.innerHTML = previewHtml(f, m);
+}
+
+// Plein feu : intensités à fond, shutters sur leur première plage ouverte
+function fullOnValues(m) {
+  const vals = {};
+  for (const c of m.channels) {
+    if (c.attribute === UNUSED) continue;
+    if (c.attribute === 'Dimmer') { vals[c.id] = 255; continue; }
+    const shut = c.functions.filter(fn => !fn.cond && fn.attribute === 'Shutter1').sort((a, b) => a.from - b.from);
+    const open = shut.find(fn => Number(fn.physFrom) >= 0.5 && Number(fn.physTo) >= 0.5);   // plage franchement ouverte
+    const ramp = shut.find(fn => Number(fn.physTo) >= 0.5);                                  // sinon : fin d'une plage qui s'ouvre
+    if (open) vals[c.id] = open.from;
+    else if (ramp) vals[c.id] = functionEnd(c, ramp);
+  }
+  return vals;
+}
+
+// ---------- fiche imprimable ----------
+function renderPrint(f) {
+  return `
+  <div class="print-toolbar">
+    <button class="btn" data-action="print-back">← Retour</button>
+    <button class="btn primary" data-action="print-go">🖨 Imprimer / Enregistrer en PDF</button>
+    <span class="muted small">Pour un fichier PDF, choisis « Enregistrer au format PDF » comme imprimante.</span>
+  </div>
+  ${renderPrintSheet(f)}`;
+}
+
 // ---------- rendu ----------
 function render() {
   const a = document.activeElement;
   const focusBind = a && a.dataset && a.dataset.bind ? { bind: a.dataset.bind, tag: a.tagName } : null;
-  app.innerHTML = state.view === 'home' ? renderHome() : state.view === 'starter' ? renderStarter() : renderEditor();
+  app.innerHTML = state.view === 'home' ? renderHome()
+    : state.view === 'starter' ? renderStarter()
+    : state.view === 'print' ? renderPrint(fx())
+    : renderEditor();
+  document.body.classList.toggle('printing', state.view === 'print');
   if (focusBind) {
     const el = [...app.querySelectorAll(`[data-bind="${CSS.escape(focusBind.bind)}"]`)].find(e => e.tagName === focusBind.tag);
     if (el) el.focus({ preventScroll: true });
@@ -625,6 +807,19 @@ function onAttributeChange(path, oldVal, newVal) {
 // ---------- événements ----------
 app.addEventListener('input', e => {
   const el = e.target;
+  if (el.dataset.tval) {
+    const v = Math.max(0, Math.min(255, Math.round(Number(el.value) || 0)));
+    state.testValues[el.dataset.tval] = v;
+    app.querySelectorAll(`[data-tval="${el.dataset.tval}"]`).forEach(x => { if (x !== el) x.value = v; });
+    updateTester();
+    return;
+  }
+  if (el.dataset.ui === 'search') {
+    state.search = el.value;
+    const cards = document.getElementById('cards');
+    if (cards) cards.outerHTML = renderCards();
+    return;
+  }
   if (el.dataset.derive === 'name' && state.derive) {
     state.derive.name = el.value;
     return;
@@ -644,6 +839,23 @@ app.addEventListener('change', e => {
   if (el.dataset.pref) {
     state.prefs[el.dataset.pref] = el.checked;
     savePrefs(state.prefs);
+    render();
+    return;
+  }
+  if (el.dataset.tval || el.dataset.ui === 'search') return;
+  if (el.hasAttribute('data-sort')) {
+    state.prefs.sort = el.value;
+    savePrefs(state.prefs);
+    render();
+    return;
+  }
+  if (el.dataset.cond) {
+    // condition d'une variante : on l'applique à toutes les plages de la variante
+    const ch = getPath(fx(), el.dataset.path);
+    const list = ch.functions.filter(f => condKey(f) === el.dataset.gkey);
+    const v = el.dataset.cond === 'master' ? el.value : Math.max(0, Math.min(255, Math.round(Number(el.value) || 0)));
+    list.forEach(f => { f.cond[el.dataset.cond] = v; });
+    scheduleSave();
     render();
     return;
   }
@@ -785,10 +997,7 @@ app.addEventListener('click', e => {
       scheduleSave();
       break;
     case 'dup-mode': {
-      const copy = clone(mode());
-      copy.id = uid();
-      copy.name += ' (copie)';
-      copy.channels.forEach(c => { c.id = uid(); });
+      const copy = cloneMode(mode(), `${mode().name} (copie)`);
       f.modes.splice(state.modeIdx + 1, 0, copy);
       state.modeIdx++;
       scheduleSave();
@@ -836,12 +1045,60 @@ app.addEventListener('click', e => {
       break;
     case 'fn-add': {
       const ch = getPath(f, el.dataset.path);
-      const last = Math.max(...ch.functions.map(x => x.from));
-      const from = Math.min(255, last + 10);
-      ch.functions.push(newFunction(ch.attribute || 'Control1', from));
+      const key = el.dataset.gkey || '';
+      const group = ch.functions.filter(x => condKey(x) === key);
+      const last = group.length ? Math.max(...group.map(x => x.from)) : -10;
+      const nf = newFunction(ch.attribute || 'Control1', Math.min(255, last + 10));
+      if (key && group[0]) nf.cond = { ...group[0].cond };
+      ch.functions.push(nf);
       scheduleSave();
       break;
     }
+    case 'variant-add': {
+      const ch = getPath(f, el.dataset.path);
+      const m = mode();
+      const master = m.channels.find(x => x.id !== ch.id && x.attribute !== UNUSED);
+      if (!master) return;
+      // une plage de 0 à 255, active quand le maître est dans une zone pas encore utilisée
+      const used = new Set(ch.functions.filter(x => x.cond).map(x => `${x.cond.master}|${x.cond.from}`));
+      let from = 0;
+      while (used.has(`${master.id}|${from}`) && from < 255) from += 64;
+      const nf = newFunction(ch.attribute || 'Control1', 0, 'Variante');
+      nf.cond = { master: master.id, from, to: Math.min(255, from + 63) };
+      ch.functions.push(nf);
+      state.open.add(ch.id);
+      scheduleSave();
+      break;
+    }
+    case 'variant-del': {
+      const ch = getPath(f, el.dataset.path);
+      const key = el.dataset.gkey;
+      const n = ch.functions.filter(x => condKey(x) === key).length;
+      if (n >= ch.functions.length) { alert('Il faut garder au moins une variante dans le canal.'); return; }
+      if (!confirm(`Supprimer cette variante et ses ${n} plage(s) ?`)) return;
+      ch.functions = ch.functions.filter(x => condKey(x) !== key);
+      scheduleSave();
+      break;
+    }
+    case 'test-defaults':
+      state.testValues = {};
+      break;
+    case 'test-zero':
+      state.testValues = Object.fromEntries(mode().channels.map(c => [c.id, 0]));
+      break;
+    case 'test-full':
+      state.testValues = fullOnValues(mode());
+      break;
+    case 'print':
+      state.view = 'print';
+      window.scrollTo(0, 0);
+      break;
+    case 'print-go':
+      window.print();
+      return;
+    case 'print-back':
+      state.view = 'edit';
+      break;
     case 'fn-del': {
       const parts = el.dataset.path.split('.');
       const idx = Number(parts.pop());
@@ -939,9 +1196,7 @@ app.addEventListener('click', e => {
       const w = f.wheels.find(x => x.id === fn.wheel);
       if (!w || !w.slots.length) return;
       if (fn.sets.length && !confirm('Remplacer les réglages déjà présents dans cette plage ?')) return;
-      const to = rangeEnd(ch, fn);
-      const step = Math.max(1, Math.floor((to - fn.from + 1) / w.slots.length));
-      fn.sets = w.slots.map((s, k) => ({ id: uid(), name: s.name, from: Math.min(to, fn.from + k * step), slot: k + 1 }));
+      fillSetsFromWheel(ch, fn, w);
       scheduleSave();
       break;
     }
@@ -963,6 +1218,7 @@ function openFixture(id) {
   if (f) registerAttributes(f.attrDefs);
   state.importNotes = [];
   state.derive = null;
+  state.testValues = {};
   state.targetPart = '';
   state.currentId = id;
   state.view = 'edit';
