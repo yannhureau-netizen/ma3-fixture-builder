@@ -1,6 +1,6 @@
 // Mode hors ligne : on garde une copie de l'appli dans le navigateur.
 // Pense à changer VERSION à chaque mise à jour des fichiers.
-const VERSION = 'fb-v5';
+const VERSION = 'fb-v6';
 const FILES = [
   './',
   './index.html',
@@ -20,7 +20,8 @@ const FILES = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // cache: 'reload' : on prend les fichiers sur le serveur, pas une vieille copie du navigateur
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -32,10 +33,12 @@ self.addEventListener('activate', e => {
 });
 
 // Réseau d'abord (pour avoir la dernière version), copie locale si pas de réseau.
+// cache: 'no-cache' : le navigateur redemande toujours au serveur si le fichier a changé
+// (GitHub Pages autorise sinon une copie de 10 minutes, ce qui retarde les mises à jour).
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })
       .then(res => {
         const copy = res.clone();
         caches.open(VERSION).then(c => c.put(e.request, copy));
