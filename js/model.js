@@ -20,6 +20,11 @@ export function newFixture() {
     beamAngle: 25,         // degrés
     beamType: 'Spot',
     revision: 1,
+    thumbnail: '',         // photo (data URL PNG), affichée dans le Patch de MA3
+    length: 0,             // dimensions en mm (0 = valeur par défaut)
+    width: 0,
+    height: 0,
+    weight: 0,             // kg
     parts: [],             // sous-éléments : [{ id, name }] (pixels, calque d'effet…)
     wheels: [],            // roues : [{ id, name, kind: 'color'|'gobo'|'other', slots: [{ id, name, color, image }] }]
     modes: [{ id: uid(), name: 'Mode 1', channels: [] }],
@@ -130,6 +135,35 @@ export const CELL_TEMPLATES = [
 export function makeCellChannels(cellKey, partId) {
   const ct = CELL_TEMPLATES.find(x => x.key === cellKey);
   return ct.keys.flatMap(k => TEMPLATES.find(t => t.key === k).make()).map(c => ({ ...c, part: partId }));
+}
+
+// Relie les canaux « Roue de couleurs / gobos n » à la n-ième roue du bon type, si elle existe
+export function linkWheels(fx, channels) {
+  channels.forEach(c => c.functions.forEach(fn => {
+    const m = /^(Color|Gobo)([12])$/.exec(fn.attribute);
+    if (!m || fn.wheel) return;
+    const w = (fx.wheels || []).filter(x => x.kind === (m[1] === 'Color' ? 'color' : 'gobo'))[Number(m[2]) - 1];
+    if (w) fn.wheel = w.id;
+  }));
+  return channels;
+}
+
+// Copie profonde d'un canal avec de nouveaux identifiants
+export function copyChannel(c) {
+  const n = JSON.parse(JSON.stringify(c));
+  n.id = uid();
+  n.functions.forEach(f => { f.id = uid(); f.sets.forEach(s => { s.id = uid(); }); });
+  return n;
+}
+
+// Nouveau mode à partir d'un autre : canaux choisis, éventuellement tous passés en 8 bits
+export function deriveMode(src, { name, to8bit, keepIds }) {
+  const channels = src.channels.filter(c => keepIds.has(c.id)).map(c => {
+    const n = copyChannel(c);
+    if (to8bit) n.fine = false;
+    return n;
+  });
+  return { id: uid(), name, channels };
 }
 
 // Nombre d'adresses DMX occupées par un mode

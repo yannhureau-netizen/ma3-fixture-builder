@@ -1,6 +1,6 @@
 // Mode hors ligne : on garde une copie de l'appli dans le navigateur.
 // Pense à changer VERSION à chaque mise à jour des fichiers.
-const VERSION = 'fb-v4';
+const VERSION = 'fb-v5';
 const FILES = [
   './',
   './index.html',
@@ -15,6 +15,7 @@ const FILES = [
   './js/unzip.js',
   './js/color.js',
   './js/gdtf-import.js',
+  './js/starters.js',
   './js/storage.js',
 ];
 

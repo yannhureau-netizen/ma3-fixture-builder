@@ -121,22 +121,29 @@ function modelsAndGeometries(fx) {
   // Faisceau principal + un faisceau par sous-élément (MA3 en fait des sous-parties du projecteur)
   const indent = fx.kind === 'moving' ? '            ' : '        ';
   const beam = [beamTag('Beam'), ...(fx.parts || []).map(p => beamTag(partGeometryName(p)))].join('\n' + indent);
+  // Dimensions réelles (mm -> m) si elles sont renseignées, sinon des valeurs plausibles
+  const moving = fx.kind === 'moving';
+  const L = Number(fx.length) > 0 ? fx.length / 1000 : (moving ? 0.35 : 0.3);
+  const W = Number(fx.width) > 0 ? fx.width / 1000 : (moving ? 0.35 : 0.3);
+  const H = Number(fx.height) > 0 ? fx.height / 1000 : (moving ? 0.65 : 0.3);
+  const r = v => Number(v.toFixed(4));
   let models = '    <Models>\n';
   let geos = '    <Geometries>\n';
-  if (fx.kind === 'moving') {
-    models += '      <Model Name="Base" Length="0.35" Width="0.35" Height="0.15" PrimitiveType="Base"/>\n';
-    models += '      <Model Name="Yoke" Length="0.35" Width="0.1" Height="0.3" PrimitiveType="Yoke"/>\n';
-    models += '      <Model Name="Head" Length="0.25" Width="0.25" Height="0.35" PrimitiveType="Head"/>\n';
+  if (moving) {
+    // pied + fourche + tête = hauteur totale
+    models += `      <Model Name="Base" Length="${r(L)}" Width="${r(W)}" Height="${r(H * 0.2)}" PrimitiveType="Base"/>\n`;
+    models += `      <Model Name="Yoke" Length="${r(L)}" Width="${r(W * 0.3)}" Height="${r(H * 0.35)}" PrimitiveType="Yoke"/>\n`;
+    models += `      <Model Name="Head" Length="${r(L * 0.7)}" Width="${r(W * 0.7)}" Height="${r(H * 0.45)}" PrimitiveType="Head"/>\n`;
     models += '      <Model Name="Beam" Length="0.1" Width="0.1" Height="0.02" PrimitiveType="Cylinder"/>\n';
     geos += `      <Geometry Name="Base" Model="Base" Position="${IDENTITY}">\n`;
-    geos += `        <Axis Name="Yoke" Model="Yoke" Position="{1,0,0,0}{0,1,0,0}{0,0,1,-0.15}{0,0,0,1}">\n`;
-    geos += `          <Axis Name="Head" Model="Head" Position="{1,0,0,0}{0,1,0,0}{0,0,1,-0.2}{0,0,0,1}">\n`;
+    geos += `        <Axis Name="Yoke" Model="Yoke" Position="{1,0,0,0}{0,1,0,0}{0,0,1,${r(-H * 0.2)}}{0,0,0,1}">\n`;
+    geos += `          <Axis Name="Head" Model="Head" Position="{1,0,0,0}{0,1,0,0}{0,0,1,${r(-H * 0.3)}}{0,0,0,1}">\n`;
     geos += `            ${beam}\n`;
     geos += '          </Axis>\n';
     geos += '        </Axis>\n';
     geos += '      </Geometry>\n';
   } else {
-    models += '      <Model Name="Base" Length="0.3" Width="0.3" Height="0.3" PrimitiveType="Cube"/>\n';
+    models += `      <Model Name="Base" Length="${r(L)}" Width="${r(W)}" Height="${r(H)}" PrimitiveType="Cube"/>\n`;
     models += '      <Model Name="Beam" Length="0.1" Width="0.1" Height="0.02" PrimitiveType="Cylinder"/>\n';
     geos += `      <Geometry Name="Base" Model="Base" Position="${IDENTITY}">\n`;
     geos += `        ${beam}\n`;
@@ -217,10 +224,15 @@ function build(fx) {
   const shortName = cleanName(fx.shortName, name);
   let x = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n';
   x += '<GDTF DataVersion="1.1">\n';
-  x += `  <FixtureType Name="${esc(name)}" ShortName="${esc(shortName)}" LongName="${esc(name)}" Manufacturer="${esc(cleanName(fx.manufacturer, 'Generic'))}" Description="${esc(fx.description)}" FixtureTypeID="${esc(fx.uuid || makeUuid())}" Thumbnail="">\n`;
+  // Photo : fichier thumbnail.png à la racine du .gdtf, référencé sans extension
+  const thumb = fx.thumbnail ? 'thumbnail' : '';
+  if (thumb) media.push({ name: 'thumbnail.png', data: dataUrlToBytes(fx.thumbnail) });
+  x += `  <FixtureType Name="${esc(name)}" ShortName="${esc(shortName)}" LongName="${esc(name)}" Manufacturer="${esc(cleanName(fx.manufacturer, 'Generic'))}" Description="${esc(fx.description)}" FixtureTypeID="${esc(fx.uuid || makeUuid())}" Thumbnail="${thumb}">\n`;
   x += attributeDefinitions(usedAttributes(fx));
   x += wheelsXml(fx, wheelNames, media);
-  x += '    <PhysicalDescriptions/>\n';
+  x += Number(fx.weight) > 0
+    ? `    <PhysicalDescriptions>\n      <Properties>\n        <Weight Value="${num(fx.weight)}"/>\n      </Properties>\n    </PhysicalDescriptions>\n`
+    : '    <PhysicalDescriptions/>\n';
   x += modelsAndGeometries(fx);
   x += dmxModes(fx, wheelNames);
   x += '    <Revisions>\n';

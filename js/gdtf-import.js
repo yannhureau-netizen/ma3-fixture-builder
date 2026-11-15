@@ -60,6 +60,24 @@ export async function importGdtf(file) {
   fx.parts = [];
   fx.wheels = [];
 
+  // --- Photo (thumbnail.png ou .svg à la racine)
+  const thumbName = attr(ft, 'Thumbnail');
+  if (thumbName) {
+    const entry = zip.find(`${thumbName}.png`) || zip.find(`${thumbName}.svg`);
+    if (entry) {
+      try {
+        const mime = entry.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+        fx.thumbnail = await toPngDataUrl(new Blob([await zip.get(entry)], { type: mime }));
+      } catch {
+        notes.push('La photo du projecteur est illisible : elle n\'a pas été reprise.');
+      }
+    }
+  }
+
+  // --- Poids
+  const weight = doc.querySelector('PhysicalDescriptions Properties Weight');
+  if (weight) fx.weight = numOr(attr(weight, 'Value'), 0);
+
   // --- Attributs propres au fichier (absents de la bibliothèque de l'appli)
   fx.attrDefs = {};
   for (const a of doc.querySelectorAll('AttributeDefinitions > Attributes > Attribute')) {
@@ -147,6 +165,23 @@ export async function importGdtf(file) {
     return null;
   };
   const hasAxis = [...geo.values()].some(g => g.tag === 'Axis');
+
+  // --- Dimensions approximatives (mm) : longueur/largeur max des modèles,
+  //     hauteur = somme des modèles du pied jusqu'au premier faisceau
+  const models = new Map([...doc.querySelectorAll('Models > Model')].map(m => [attr(m, 'Name'), {
+    l: numOr(attr(m, 'Length'), 0), w: numOr(attr(m, 'Width'), 0), h: numOr(attr(m, 'Height'), 0),
+  }]));
+  const modelOf = n => models.get(attr(geo.get(n)?.el, 'Model'));
+  if (models.size) {
+    let L = 0, W = 0, H = 0;
+    for (const n of geo.keys()) { const m = modelOf(n); if (m) { L = Math.max(L, m.l); W = Math.max(W, m.w); } }
+    const firstBeam = [...geo.entries()].find(([, g]) => g.tag === 'Beam')?.[0];
+    for (let n = firstBeam; n; n = geo.get(n)?.parent) { const m = modelOf(n); if (m && geo.get(n).tag !== 'Beam') H += m.h; }
+    if (!H) for (const n of geo.keys()) { const m = modelOf(n); if (m) H = Math.max(H, m.h); }
+    fx.length = Math.round(L * 1000);
+    fx.width = Math.round(W * 1000);
+    fx.height = Math.round(H * 1000);
+  }
 
   // Sous-éléments créés au fil des modes (un par nom de géométrie)
   const partByName = new Map();

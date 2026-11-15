@@ -1,5 +1,6 @@
 import { ATTRIBUTES, getAttribute, attributeLabel, registerAttributes, extraAttributes, isKnownAttribute, UNUSED } from './attributes.js';
-import { newFixture, newChannel, newFunction, newWheel, newSlot, uid, TEMPLATES, CELL_TEMPLATES, makeCellChannels, footprint, validate } from './model.js';
+import { newFixture, newChannel, newFunction, newWheel, newSlot, uid, TEMPLATES, CELL_TEMPLATES, makeCellChannels, footprint, validate, linkWheels, deriveMode } from './model.js';
+import { STARTERS, STARTER_ICONS, buildStarter } from './starters.js';
 import { buildGdtf, buildDescriptionXml, gdtfFileName, makeUuid } from './gdtf.js';
 import { importGdtf } from './gdtf-import.js';
 import { toPngDataUrl, isHex } from './color.js';
@@ -9,7 +10,8 @@ const app = document.getElementById('app');
 
 const state = {
   fixtures: loadAll(),
-  view: 'home',          // 'home' | 'edit'
+  view: 'home',          // 'home' | 'starter' (choix du modèle) | 'edit'
+  derive: null,          // panneau « mode dérivé » : { name, to8bit, keep: Set(id) }
   currentId: null,
   step: 1,               // 1 Projecteur, 2 Roues, 3 Canaux, 4 Export
   importNotes: [],       // remarques affichées après l'ouverture d'un .gdtf
@@ -136,6 +138,7 @@ function renderHome() {
     ${list.length ? `<div class="cards">${list.map(f => `
       <article class="card">
         <div class="card-body" data-action="open" data-id="${f.id}" role="button" tabindex="0">
+          ${f.thumbnail ? `<img class="card-thumb" src="${f.thumbnail}" alt="">` : ''}
           <div class="card-maker">${esc(f.manufacturer) || '<i>Fabricant ?</i>'}</div>
           <div class="card-name">${esc(f.name) || '<i>Sans nom</i>'}</div>
           <div class="muted small">${f.kind === 'moving' ? 'Lyre' : 'Fixe'} · ${f.modes.length} mode${f.modes.length > 1 ? 's' : ''} · ${f.modes.map(m => footprint(m) + ' adr.').join(', ')}${f.parts && f.parts.length ? ` · ${f.parts.length} sous-élément${f.parts.length > 1 ? 's' : ''}` : ''}</div>
@@ -157,6 +160,35 @@ function renderHome() {
         <p class="muted small">Tu as déjà un fichier .gdtf à corriger ? Utilise « Ouvrir un fichier .gdtf » en haut.</p>
         <button class="btn primary big" data-action="new">Créer mon premier projecteur</button>
       </div>`}
+  </section>`;
+}
+
+// ---------- choix du modèle de départ ----------
+function starterSummary(s) {
+  if (s.key === 'blank') return '';
+  const f = s.build();
+  return `${f.modes.length} mode${f.modes.length > 1 ? 's' : ''} : ${f.modes.map(m => footprint(m)).join(', ')} adr.`;
+}
+
+function renderStarter() {
+  return `
+  <section class="home">
+    <div class="home-head">
+      <div>
+        <h1>Nouveau projecteur</h1>
+        <p class="muted">Choisis un point de départ. Tu pourras tout modifier ensuite : noms, canaux, plages, modes…</p>
+      </div>
+      <button class="btn" data-action="home">Annuler</button>
+    </div>
+    <div class="cards starters">
+      ${STARTERS.map(s => `
+      <button class="starter${s.key === 'blank' ? ' blank' : ''}" data-action="start" data-key="${s.key}">
+        <svg viewBox="0 0 48 48" aria-hidden="true">${STARTER_ICONS[s.icon]}</svg>
+        <b>${esc(s.label)}</b>
+        <small>${esc(s.desc)}</small>
+        <span class="muted small">${starterSummary(s)}</span>
+      </button>`).join('')}
+    </div>
   </section>`;
 }
 
@@ -278,6 +310,26 @@ function renderStep1(f) {
     ${field('Puissance (W)', 'power', f.power, { type: 'number', attrs: 'min="0"' })}
     ${field('Angle du faisceau (°)', 'beamAngle', f.beamAngle, { type: 'number', attrs: 'min="0" max="180"' })}
   </div>
+
+  <h3>Photo et caractéristiques <span class="muted small">(facultatif)</span></h3>
+  <div class="phys">
+    <div class="thumb-box">
+      ${f.thumbnail ? `<img class="thumb-big" src="${f.thumbnail}" alt="Photo du projecteur">` : '<div class="thumb-empty">Pas de photo</div>'}
+      <div class="row">
+        <label class="btn small">${f.thumbnail ? 'Changer la photo' : 'Ajouter une photo…'}<input type="file" accept="image/*" data-file="thumbnail" hidden></label>
+        ${f.thumbnail ? '<button class="btn small danger" data-action="thumb-clear">Retirer</button>' : ''}
+      </div>
+    </div>
+    <div class="phys-fields">
+      <div class="grid4">
+        ${field('Longueur (mm)', 'length', f.length || '', { type: 'number', attrs: 'min="0" placeholder="—"' })}
+        ${field('Largeur (mm)', 'width', f.width || '', { type: 'number', attrs: 'min="0" placeholder="—"' })}
+        ${field('Hauteur (mm)', 'height', f.height || '', { type: 'number', attrs: 'min="0" placeholder="—"' })}
+        ${field('Poids (kg)', 'weight', f.weight || '', { type: 'number', attrs: 'min="0" step="0.1" placeholder="—"' })}
+      </div>
+      <p class="muted small">La photo s'affiche dans le Patch de grandMA3 pour reconnaître le projecteur. Les dimensions donnent sa taille dans la vue 3D.</p>
+    </div>
+  </div>
   ${renderParts(f)}`;
 }
 
@@ -295,7 +347,7 @@ function renderParts(f) {
     return `
     <div class="part-row">
       <input type="text" data-bind="parts.${i}.name" data-kind="text" value="${esc(p.name)}" placeholder="ex. Anneau" aria-label="Nom du sous-élément">
-      <span class="muted small">${n} canal${n > 1 ? 'aux' : ''}</span>
+      <span class="muted small">${n} ${n > 1 ? 'canaux' : 'canal'}</span>
       <button class="icon danger" title="Supprimer ce sous-élément" data-action="del-part" data-id="${p.id}">✕</button>
     </div>`;
   }).join('')}</div>` : ''}
@@ -336,9 +388,12 @@ function renderStep2(f) {
     <div class="row">
       <span class="pill" data-footprint>${footprint(m)} adresses DMX</span>
       <button class="btn small" data-action="dup-mode">Dupliquer ce mode</button>
+      ${m.channels.length ? '<button class="btn small" data-action="derive-open">Créer un mode dérivé…</button>' : ''}
       ${f.modes.length > 1 ? '<button class="btn small danger" data-action="del-mode">Supprimer ce mode</button>' : ''}
     </div>
   </div>
+
+  ${state.derive ? renderDerive(f, m) : ''}
 
   <div class="templates">
     <div class="tpl-head">
@@ -352,6 +407,44 @@ function renderStep2(f) {
 
   ${m.channels.length ? `<ol class="channels">${m.channels.map((c, ci) => renderChannel(f, m, mi, c, ci)).join('')}</ol>` :
     '<div class="empty small-empty">Aucun canal pour l\'instant. Clique sur un bouton ci-dessus, par exemple « + Intensité ».</div>'}`;
+}
+
+function channelCaption(f, c) {
+  const part = c.part ? f.parts.find(p => p.id === c.part) : null;
+  return `${attributeLabel(c.attribute)}${part ? ` · ${part.name}` : ''}${c.fine ? ' · 16 bits' : ''}`;
+}
+
+function renderDerive(f, m) {
+  const d = state.derive;
+  let addr = 1;
+  const rows = m.channels.map(c => {
+    const a = addr;
+    addr += c.fine ? 2 : 1;
+    return `<label class="derive-row"><input type="checkbox" data-derive="keep" data-id="${c.id}"${d.keep.has(c.id) ? ' checked' : ''}>
+      <span class="addr">${c.fine ? `${a}-${a + 1}` : a}</span> ${esc(channelCaption(f, c))}</label>`;
+  }).join('');
+  const kept = m.channels.filter(c => d.keep.has(c.id));
+  const size = kept.reduce((n, c) => n + (c.fine && !d.to8bit ? 2 : 1), 0);
+  return `
+  <div class="derive">
+    <b>Nouveau mode à partir de « ${esc(m.name)} »</b>
+    <p class="muted small">Pratique quand la doc propose plusieurs modes proches : version 8 bits, mode réduit… Le mode d'origine n'est pas modifié.</p>
+    <div class="derive-top">
+      <label class="field"><span>Nom du nouveau mode</span><input type="text" data-derive="name" value="${esc(d.name)}"></label>
+      <label class="chk"><input type="checkbox" data-derive="to8bit"${d.to8bit ? ' checked' : ''}> Passer tous les canaux 16 bits en 8 bits</label>
+    </div>
+    <div class="row small-gap">
+      <span class="muted small">Canaux à garder :</span>
+      <button class="btn small ghost" data-action="derive-all">Tout cocher</button>
+      <button class="btn small ghost" data-action="derive-none">Tout décocher</button>
+    </div>
+    <div class="derive-list">${rows}</div>
+    <div class="row">
+      <span class="pill">${kept.length} ${kept.length > 1 ? 'canaux' : 'canal'} · ${size} adresses DMX</span>
+      <button class="btn primary" data-action="derive-create"${kept.length ? '' : ' disabled'}>Créer le mode</button>
+      <button class="btn" data-action="derive-cancel">Annuler</button>
+    </div>
+  </div>`;
 }
 
 function renderChannel(f, m, mi, c, ci) {
@@ -477,7 +570,7 @@ function renderStep3(f, issues) {
 function render() {
   const a = document.activeElement;
   const focusBind = a && a.dataset && a.dataset.bind ? { bind: a.dataset.bind, tag: a.tagName } : null;
-  app.innerHTML = state.view === 'home' ? renderHome() : renderEditor();
+  app.innerHTML = state.view === 'home' ? renderHome() : state.view === 'starter' ? renderStarter() : renderEditor();
   if (focusBind) {
     const el = [...app.querySelectorAll(`[data-bind="${CSS.escape(focusBind.bind)}"]`)].find(e => e.tagName === focusBind.tag);
     if (el) el.focus({ preventScroll: true });
@@ -532,6 +625,10 @@ function onAttributeChange(path, oldVal, newVal) {
 // ---------- événements ----------
 app.addEventListener('input', e => {
   const el = e.target;
+  if (el.dataset.derive === 'name' && state.derive) {
+    state.derive.name = el.value;
+    return;
+  }
   if (el.dataset.ui && el.tagName !== 'SELECT') {
     state[el.dataset.ui] = el.type === 'number' ? Number(el.value) : el.value;
     return;
@@ -552,6 +649,17 @@ app.addEventListener('change', e => {
   }
   if (el.dataset.ui) {
     if (el.tagName === 'SELECT') state[el.dataset.ui] = el.value;
+    return;
+  }
+  if (el.dataset.derive && state.derive) {
+    if (el.dataset.derive === 'to8bit') state.derive.to8bit = el.checked;
+    if (el.dataset.derive === 'keep') el.checked ? state.derive.keep.add(el.dataset.id) : state.derive.keep.delete(el.dataset.id);
+    if (el.dataset.derive !== 'name') render();
+    return;
+  }
+  if (el.dataset.file === 'thumbnail') {
+    setThumbnail(el.files[0]);
+    el.value = '';
     return;
   }
   if (el.dataset.file === 'import') {
@@ -603,12 +711,44 @@ app.addEventListener('click', e => {
   const act = el.dataset.action;
   const f = fx();
   switch (act) {
-    case 'new': {
-      const nf = newFixture();
+    case 'new':
+      state.view = 'starter';
+      window.scrollTo(0, 0);
+      break;
+    case 'start': {
+      const nf = buildStarter(el.dataset.key);
       state.fixtures.push(nf);
       openFixture(nf.id);
       scheduleSave();
       return;
+    }
+    case 'thumb-clear':
+      f.thumbnail = '';
+      scheduleSave();
+      break;
+    case 'derive-open': {
+      const m = mode();
+      state.derive = { name: `${m.name} (8 bits)`, to8bit: true, keep: new Set(m.channels.map(c => c.id)) };
+      break;
+    }
+    case 'derive-all':
+      state.derive.keep = new Set(mode().channels.map(c => c.id));
+      break;
+    case 'derive-none':
+      state.derive.keep = new Set();
+      break;
+    case 'derive-cancel':
+      state.derive = null;
+      break;
+    case 'derive-create': {
+      const d = state.derive;
+      const name = d.name.trim() || `${mode().name} (copie)`;
+      f.modes.push(deriveMode(mode(), { name, to8bit: d.to8bit, keepIds: d.keep }));
+      state.modeIdx = f.modes.length - 1;
+      state.derive = null;
+      scheduleSave();
+      window.scrollTo(0, 0);
+      break;
     }
     case 'open': openFixture(el.dataset.id); return;
     case 'home': state.view = 'home'; state.currentId = null; break;
@@ -638,7 +778,7 @@ app.addEventListener('click', e => {
       return;
     case 'step': state.step = Number(el.dataset.step); window.scrollTo(0, 0); break;
     case 'kind': f.kind = el.dataset.kind; scheduleSave(); break;
-    case 'mode': state.modeIdx = Number(el.dataset.idx); break;
+    case 'mode': state.modeIdx = Number(el.dataset.idx); state.derive = null; break;
     case 'add-mode':
       f.modes.push({ id: uid(), name: `Mode ${f.modes.length + 1}`, channels: [] });
       state.modeIdx = f.modes.length - 1;
@@ -665,12 +805,7 @@ app.addEventListener('click', e => {
       const chans = t.make();
       if (state.targetPart && f.parts.some(p => p.id === state.targetPart)) chans.forEach(c => { c.part = state.targetPart; });
       // Roue de couleurs / gobos : on la relie tout seul à la roue correspondante si elle existe
-      chans.forEach(c => c.functions.forEach(fn => {
-        const m = /^(Color|Gobo)([12])$/.exec(fn.attribute);
-        if (!m || fn.wheel) return;
-        const w = f.wheels.filter(x => x.kind === (m[1] === 'Color' ? 'color' : 'gobo'))[Number(m[2]) - 1];
-        if (w) fn.wheel = w.id;
-      }));
+      linkWheels(f, chans);
       mode().channels.push(...chans);
       if (t.key === 'other') state.open.add(chans[0].id);
       scheduleSave();
@@ -827,6 +962,7 @@ function openFixture(id) {
   if (f && !Array.isArray(f.wheels)) f.wheels = []; // … ou avant les roues
   if (f) registerAttributes(f.attrDefs);
   state.importNotes = [];
+  state.derive = null;
   state.targetPart = '';
   state.currentId = id;
   state.view = 'edit';
@@ -871,6 +1007,17 @@ async function openGdtf(file) {
     render();
   } catch (e) {
     alert(`Impossible d'ouvrir ce fichier : ${e.message}.`);
+  }
+}
+
+async function setThumbnail(file) {
+  if (!file) return;
+  try {
+    fx().thumbnail = await toPngDataUrl(file, 256);
+    scheduleSave();
+    render();
+  } catch {
+    alert('Cette image n\'a pas pu être lue. Essaie un fichier PNG ou JPG.');
   }
 }
 

@@ -35,10 +35,16 @@ Pour arrêter le serveur : `Ctrl+C` dans la fenêtre PowerShell.
 
 ## Utilisation en 4 étapes
 
-1. **Projecteur** : fabricant, nom, lyre ou fixe, type de source.
+En cliquant sur **« + Nouveau projecteur »**, choisis un point de départ : fiche vide, ou modèle tout prêt (PAR LED RGB / RGBW / RGBWA+UV, lyre spot / wash / beam, barre LED 8 pixels, découpe LED, stroboscope). Le modèle donne des modes et des canaux courants, que tu ajustes ensuite d'après la doc.
+
+1. **Projecteur** : fabricant, nom, lyre ou fixe, type de source. Facultatif : une **photo** (affichée dans le Patch de grandMA3), les **dimensions** (taille dans la vue 3D) et le **poids**.
 2. **Roues** (facultatif) : roues de couleurs, de gobos, prismes… avec la couleur ou l'image de chaque fente.
 3. **Canaux DMX** : ajoute les canaux dans l'ordre de la doc du fabricant avec les boutons « + Intensité », « + Pan / Tilt 16 bits », « + RGB »… Le bouton **Plages** permet de découper un canal (ex. 0–7 fermé, 8–15 ouvert, 16–249 strobe), et d'ajouter des **réglages nommés** (un gobo, une couleur). La case « Réglages avancés » affiche les valeurs physiques (degrés, Hz…). « + Canal inutilisé » réserve une adresse sans fonction.
 4. **Exporter** : l'appli vérifie la fiche, puis télécharge le fichier `.gdtf`.
+
+### Mode dérivé
+
+Beaucoup de docs proposent plusieurs modes presque identiques. À l'étape **Canaux DMX**, le bouton **« Créer un mode dérivé… »** crée un nouveau mode à partir du mode affiché : tu choisis son nom, tu peux passer tous les canaux 16 bits en 8 bits, et tu coches les canaux à garder. Le nombre d'adresses s'affiche en direct, et le mode d'origine n'est pas modifié.
 
 ### Roues de couleurs et de gobos
 
@@ -85,7 +91,8 @@ Tes projecteurs sont enregistrés automatiquement **dans le navigateur** de cet 
 | `index.html`, `css/style.css` | La page et son style |
 | `js/app.js` | L'interface (écrans, boutons) |
 | `js/attributes.js` | La liste des fonctions GDTF (Dimmer, Pan, ColorAdd_R…) avec leur libellé français |
-| `js/model.js` | Les données, les modèles de canaux « + … » et les vérifications |
+| `js/model.js` | Les données, les modèles de canaux « + … », le mode dérivé et les vérifications |
+| `js/starters.js` | Les modèles de départ (PAR, lyres, barre LED…) |
 | `js/gdtf.js` | La fabrication du `description.xml` au format GDTF 1.1 (avec roues et images) |
 | `js/gdtf-import.js` | La lecture d'un `.gdtf` existant |
 | `js/color.js` | Conversion des couleurs (format GDTF CIE xyY) et des images en PNG |

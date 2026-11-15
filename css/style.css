@@ -217,6 +217,40 @@ input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; accent-color:
 .notes { margin-bottom: 12px; }
 .notes .btn { margin-top: 8px; }
 
+/* Modèles de départ */
+.starters { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.starter {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
+  padding: 14px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+}
+.starter:hover { border-color: var(--accent); }
+.starter svg { width: 40px; height: 40px; fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; margin-bottom: 4px; }
+.starter small { color: var(--muted); }
+.starter.blank { border-style: dashed; }
+.starter.blank svg { stroke: var(--muted); }
+
+/* Photo et caractéristiques */
+.card-thumb { float: right; width: 56px; height: 56px; object-fit: contain; border-radius: 8px; background: var(--surface-2); margin-left: 8px; }
+.phys { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.thumb-box { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.thumb-big { width: 128px; height: 128px; object-fit: contain; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); }
+.thumb-empty { width: 128px; height: 128px; display: grid; place-items: center; border-radius: var(--radius); border: 1px dashed var(--border); color: var(--muted); font-size: .85rem; }
+.phys-fields { flex: 1 1 320px; }
+.grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0 12px; }
+
+/* Mode dérivé */
+.derive { border: 1px solid var(--accent); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; background: var(--bg); }
+.derive p { margin: 4px 0 10px; }
+.derive-top { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end; }
+.derive-top .field { flex: 1 1 240px; max-width: 360px; }
+.derive-top .chk { margin-bottom: 20px; }
+.derive-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 12px; margin: 8px 0 12px; max-height: 340px; overflow: auto; }
+.derive-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.derive-row:hover { background: var(--surface-2); }
+.derive-row .addr { min-width: 46px; padding: 2px 4px; font-size: .85rem; }
+.small-gap { gap: 6px; }
+
 /* Export */
 .alert { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; border: 1px solid; }
 .alert ul { margin: 6px 0 0; padding-left: 20px; }
